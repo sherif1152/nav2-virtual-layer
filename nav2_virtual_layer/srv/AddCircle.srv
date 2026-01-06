@@ -1,0 +1,10 @@
+# Request
+float64 x
+float64 y
+float64 radius
+string frame_id
+uint8 cost_level  # 254=LETHAL, 200=HIGH, 128=MEDIUM
+---
+# Response
+string uuid
+bool success

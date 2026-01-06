@@ -1,0 +1,5 @@
+# Request
+string uuid
+---
+# Response
+bool success

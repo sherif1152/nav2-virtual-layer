@@ -1,0 +1,9 @@
+<library path="virtual_layer">
+  <class name="nav2_virtual_layer::VirtualLayer"
+    type="nav2_virtual_layer::VirtualLayer"
+    base_class_type="nav2_costmap_2d::Layer">
+    <description>
+      Virtual restriction layer for Nav2 costmap
+    </description>
+  </class>
+</library>

@@ -1,0 +1,12 @@
+# Request
+float64 x1
+float64 y1
+float64 x2
+float64 y2
+float64 thickness
+string frame_id
+uint8 cost_level
+---
+# Response
+string uuid
+bool success

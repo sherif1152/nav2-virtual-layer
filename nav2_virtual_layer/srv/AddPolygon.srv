@@ -1,0 +1,8 @@
+# Request
+geometry_msgs/Point[] points
+string frame_id
+uint8 cost_level
+---
+# Response
+string uuid
+bool success
