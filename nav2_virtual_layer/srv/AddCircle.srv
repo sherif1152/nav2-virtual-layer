@@ -1,10 +1,14 @@
-# Request
-float64 x
-float64 y
-float64 radius
-string frame_id
-uint8 cost_level  # 254=LETHAL, 200=HIGH, 128=MEDIUM
+# Service to add a circle shape to the virtual layer
+#
+# Request:
+float64 x                # Center x coordinate
+float64 y                # Center y coordinate
+float64 radius           # Radius of the circle
+string frame_id          # Reference frame (empty = use layer default)
+uint8 cost_level         # Cost level (254=LETHAL, 253=HIGH, 200=MEDIUM, 50=LOW)
+float64 duration         # Duration in seconds (-1.0 = infinite, default)
+
 ---
-# Response
-string uuid
-bool success
+# Response:
+string uuid              # Unique identifier of the created shape
+bool success             # Whether the operation succeeded

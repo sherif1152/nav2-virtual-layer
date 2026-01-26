@@ -1,8 +1,8 @@
 /*********************************************************************
  * Copyright (C) Sherif Fathey - All Rights Reserved
- * 
+ *
  * This file is part of the nav2_virtual_layer package.
- * 
+ *
  * @file virtual_layer.cpp
  * @brief Implementation of the Virtual Layer plugin for Nav2
  * @author Sherif Fathey
@@ -42,11 +42,6 @@ std::string VirtualLayer::generateUUID() {
 // =======================
 // String Trimming Helper
 // =======================
-/**
- * @brief Remove leading and trailing whitespace from string
- * @param str Input string
- * @return Trimmed string
- */
 std::string trim(const std::string &str) {
   size_t first = str.find_first_not_of(" \t\n\r");
   if (first == std::string::npos)
@@ -56,21 +51,88 @@ std::string trim(const std::string &str) {
 }
 
 // =======================
+// Check and Remove Expired Shapes
+// =======================
+void VirtualLayer::checkExpiredShapes() {
+  std::lock_guard<std::mutex> lock(shapes_mutex_);
+
+  auto node = node_.lock();
+  if (!node) {
+    return;
+  }
+
+  rclcpp::Time current_time = node->now();
+
+  // {uuid, type}
+  std::vector<std::pair<std::string, std::string>> expired_shapes;
+
+  // =====================
+  // Check expired circles
+  // =====================
+  for (const auto &[uuid, circle] : circles_) {
+    if (circle.isExpired(current_time)) {
+      expired_shapes.emplace_back(uuid, "CIRCLE");
+      RCLCPP_DEBUG(logger_, "Circle [%s] expired after %.1f seconds",
+                   uuid.c_str(), circle.duration_seconds);
+    }
+  }
+
+  // =====================
+  // Check expired lines
+  // =====================
+  for (const auto &[uuid, line] : lines_) {
+    if (line.isExpired(current_time)) {
+      expired_shapes.emplace_back(uuid, "LINE");
+      RCLCPP_DEBUG(logger_, "Line [%s] expired after %.1f seconds",
+                   uuid.c_str(), line.duration_seconds);
+    }
+  }
+
+  // =====================
+  // Check expired polygons
+  // =====================
+  for (const auto &[uuid, polygon] : polygons_) {
+    if (polygon.isExpired(current_time)) {
+      expired_shapes.emplace_back(uuid, "POLYGON");
+      RCLCPP_DEBUG(logger_, "Polygon [%s] expired after %.1f seconds",
+                   uuid.c_str(), polygon.duration_seconds);
+    }
+  }
+
+  // =====================
+  // Remove expired shapes
+  // =====================
+  for (const auto &[uuid, type] : expired_shapes) {
+    circles_.erase(uuid);
+    lines_.erase(uuid);
+    polygons_.erase(uuid);
+
+    RCLCPP_INFO(logger_, "Removed expired %s [%s]", type.c_str(), uuid.c_str());
+  }
+
+  // =====================
+  // Summary
+  // =====================
+  if (!expired_shapes.empty()) {
+    RCLCPP_INFO(logger_, "Removed %zu expired shape(s)", expired_shapes.size());
+  }
+}
+
+// =======================
 // Resolve Forms File Path
 // =======================
 std::string VirtualLayer::resolveFormsFilePath(const std::string &forms_file) {
   auto node = node_.lock();
 
-  // =====  1: Absolute Path =====
+  // 1: Absolute Path
   if (forms_file[0] == '/') {
-    RCLCPP_DEBUG(node->get_logger(), "Using absolute path: %s",
-                 forms_file.c_str());
+    RCLCPP_DEBUG(logger_, "Using absolute path: %s", forms_file.c_str());
     return forms_file;
   }
 
-  // =====  2: package:// URI =====
+  // 2: package:// URI
   if (forms_file.find("package://") == 0) {
-    size_t pkg_start = 10; // Length of "package://"
+    size_t pkg_start = 10;
     size_t slash_pos = forms_file.find('/', pkg_start);
 
     if (slash_pos != std::string::npos) {
@@ -83,19 +145,19 @@ std::string VirtualLayer::resolveFormsFilePath(const std::string &forms_file) {
             ament_index_cpp::get_package_share_directory(package_name);
         std::string full_path = package_share + "/" + relative_path;
 
-        RCLCPP_DEBUG(node->get_logger(), "Resolved package:// URI '%s' to: %s",
+        RCLCPP_DEBUG(logger_, "Resolved package:// URI '%s' to: %s",
                      forms_file.c_str(), full_path.c_str());
         return full_path;
 
       } catch (const std::exception &e) {
-        RCLCPP_ERROR(node->get_logger(), "Failed to find package '%s': %s",
+        RCLCPP_ERROR(logger_, "Failed to find package '%s': %s",
                      package_name.c_str(), e.what());
         return "";
       }
     }
   }
 
-  // =====  3: Relative Path within Package =====
+  // 3: Relative Path within Package
   try {
     std::string package_share =
         ament_index_cpp::get_package_share_directory("nav2_virtual_layer");
@@ -108,13 +170,13 @@ std::string VirtualLayer::resolveFormsFilePath(const std::string &forms_file) {
       full_path = package_share + "/config/" + forms_file;
     }
 
-    RCLCPP_DEBUG(node->get_logger(), "Resolved relative path '%s' to: %s",
+    RCLCPP_DEBUG(logger_, "Resolved relative path '%s' to: %s",
                  forms_file.c_str(), full_path.c_str());
     return full_path;
 
   } catch (const std::exception &e) {
-    RCLCPP_ERROR(node->get_logger(),
-                 "Could not find package share directory: %s", e.what());
+    RCLCPP_ERROR(logger_, "Could not find package share directory: %s",
+                 e.what());
     return "";
   }
 }
@@ -127,7 +189,7 @@ void VirtualLayer::loadFormsFromYAML(const std::string &yaml_path) {
 
   std::ifstream file(yaml_path);
   if (!file.is_open()) {
-    RCLCPP_ERROR(node->get_logger(), "Cannot open file: %s", yaml_path.c_str());
+    RCLCPP_ERROR(logger_, "Cannot open file: %s", yaml_path.c_str());
     return;
   }
 
@@ -137,22 +199,19 @@ void VirtualLayer::loadFormsFromYAML(const std::string &yaml_path) {
   std::string line;
   bool in_forms_section = false;
 
-  RCLCPP_INFO(node->get_logger(), "Reading forms from: %s", yaml_path.c_str());
+  RCLCPP_INFO(logger_, "Reading forms from: %s", yaml_path.c_str());
 
-  // Parse YAML file line by line
   while (std::getline(file, line)) {
     std::string trimmed = trim(line);
     if (trimmed.empty() || trimmed[0] == '#') {
       continue;
     }
 
-    // Look for the "forms:" section
     if (trimmed.find("forms:") == 0) {
       in_forms_section = true;
       continue;
     }
 
-    // Parse forms list items
     if (in_forms_section) {
       size_t dash_pos = trimmed.find('-');
       if (dash_pos != std::string::npos) {
@@ -162,7 +221,6 @@ void VirtualLayer::loadFormsFromYAML(const std::string &yaml_path) {
           continue;
         }
 
-        // Remove quotes if present
         if (form.front() == '"' || form.front() == '\'') {
           form = form.substr(1);
         }
@@ -172,7 +230,6 @@ void VirtualLayer::loadFormsFromYAML(const std::string &yaml_path) {
 
         forms.push_back(form);
       } else if (!trimmed.empty() && trimmed[0] != ' ' && trimmed[0] != '-') {
-        // End of forms section
         break;
       }
     }
@@ -180,14 +237,13 @@ void VirtualLayer::loadFormsFromYAML(const std::string &yaml_path) {
 
   file.close();
 
-  RCLCPP_INFO(node->get_logger(), "Found %zu forms in YAML file", forms.size());
+  RCLCPP_INFO(logger_, "Found %zu forms in YAML file", forms.size());
 
-  // Parse each WKT form
   for (const auto &form : forms) {
-    parseWKT(form, "", map_frame_, static_cast<CostLevel>(default_cost));
+    parseWKT(form, "", map_frame_, static_cast<CostLevel>(default_cost), -1.0);
   }
 
-  RCLCPP_INFO(node->get_logger(),
+  RCLCPP_INFO(logger_,
               "Successfully loaded: %zu circles, %zu lines, %zu polygons",
               circles_.size(), lines_.size(), polygons_.size());
 }
@@ -195,20 +251,11 @@ void VirtualLayer::loadFormsFromYAML(const std::string &yaml_path) {
 // =======================
 // Coordinate Parser Helper
 // =======================
-/**
- * @brief Parse coordinate pairs from WKT string format
- * 
- * Parses strings like "x1 y1, x2 y2, x3 y3" into coordinate pairs.
- * 
- * @param coords_str Coordinate string
- * @return Vector of (x, y) pairs
- */
 std::vector<std::pair<double, double>>
 parseCoordinates(const std::string &coords_str) {
   std::vector<std::pair<double, double>> points;
   std::string cleaned = coords_str;
 
-  // Remove multiple consecutive spaces
   std::string::iterator new_end =
       std::unique(cleaned.begin(), cleaned.end(),
                   [](char a, char b) { return a == ' ' && b == ' '; });
@@ -217,7 +264,6 @@ parseCoordinates(const std::string &coords_str) {
   std::istringstream ss(cleaned);
   std::string pair_str;
 
-  // Parse comma-separated coordinate pairs
   while (std::getline(ss, pair_str, ',')) {
     pair_str = trim(pair_str);
     size_t space_pos = pair_str.find(' ');
@@ -231,7 +277,6 @@ parseCoordinates(const std::string &coords_str) {
         double y = std::stod(trim(y_str));
         points.push_back({x, y});
       } catch (const std::exception &e) {
-        // Skip invalid coordinate pairs
         continue;
       }
     }
@@ -240,76 +285,122 @@ parseCoordinates(const std::string &coords_str) {
 }
 
 // =======================
-// WKT Parser (Enhanced with Cost Level)
+// WKT Parser (Enhanced with Duration Support)
 // =======================
 void VirtualLayer::parseWKT(const std::string &wkt, const std::string &uuid,
-                            const std::string &frame, CostLevel cost) {
+                            const std::string &frame, CostLevel cost,
+                            double duration) {
   std::lock_guard<std::mutex> lock(shapes_mutex_);
+
+  auto node = node_.lock();
+  if (!node) {
+    return;
+  }
 
   std::string wkt_trimmed = trim(wkt);
 
-  // Extract cost level from [COST:XXX] tag if present
+  // =====================
+  // 1) Defaults
+  // =====================
   CostLevel final_cost = cost;
-  size_t cost_pos = wkt_trimmed.find("[COST:");
-  if (cost_pos != std::string::npos) {
-    size_t end_pos = wkt_trimmed.find("]", cost_pos);
-    if (end_pos != std::string::npos) {
-      std::string cost_str =
-          wkt_trimmed.substr(cost_pos + 6, end_pos - cost_pos - 6);
-      try {
-        int cost_val = std::stoi(trim(cost_str));
-        final_cost = static_cast<CostLevel>(cost_val);
-      } catch (...) {
-        // Use default if parsing fails
-      }
-      // Remove cost tag from WKT string
-      wkt_trimmed = wkt_trimmed.substr(0, cost_pos);
-      wkt_trimmed = trim(wkt_trimmed);
+  double final_duration = duration;
+  double thickness = 0.3;
+
+  // =====================
+  // 2) Extract TAGS (order independent)
+  // =====================
+  auto extract_tag = [&](const std::string &tag) -> std::optional<std::string> {
+    size_t pos = wkt_trimmed.find(tag);
+    if (pos == std::string::npos)
+      return std::nullopt;
+
+    size_t end = wkt_trimmed.find("]", pos);
+    if (end == std::string::npos)
+      return std::nullopt;
+
+    return trim(wkt_trimmed.substr(pos + tag.size(), end - pos - tag.size()));
+  };
+
+  // COST
+  if (auto val = extract_tag("[COST:"); val.has_value()) {
+    try {
+      final_cost = static_cast<CostLevel>(std::stoi(*val));
+    } catch (...) {
     }
   }
 
-  // Convert to uppercase for case-insensitive parsing
+  // DURATION
+  if (auto val = extract_tag("[DURATION:"); val.has_value()) {
+    try {
+      final_duration = std::stod(*val);
+    } catch (...) {
+    }
+  }
+
+  // THICKNESS (for lines)
+  if (auto val = extract_tag("[THICKNESS:"); val.has_value()) {
+    try {
+      thickness = std::stod(*val);
+    } catch (...) {
+    }
+  }
+
+  // =====================
+  // 3) Remove all tags
+  // =====================
+  size_t cut_pos = wkt_trimmed.find('[');
+  if (cut_pos != std::string::npos) {
+    wkt_trimmed = trim(wkt_trimmed.substr(0, cut_pos));
+  }
+
+  // Uppercase copy for type detection
   std::string wkt_upper = wkt_trimmed;
   std::transform(wkt_upper.begin(), wkt_upper.end(), wkt_upper.begin(),
                  ::toupper);
 
-  auto node = node_.lock();
   std::string shape_uuid = uuid.empty() ? generateUUID() : uuid;
 
-  // ===== Parse CIRCLE =====
-  // Format: CIRCLE(x y radius)
+  // ============================================================
+  // CIRCLE (x y r)
+  // ============================================================
   if (wkt_upper.find("CIRCLE") == 0) {
     size_t start = wkt_trimmed.find("(");
     size_t end = wkt_trimmed.rfind(")");
 
     if (start != std::string::npos && end != std::string::npos && end > start) {
-      std::string params = wkt_trimmed.substr(start + 1, end - start - 1);
-      std::istringstream ss(params);
+      std::istringstream ss(wkt_trimmed.substr(start + 1, end - start - 1));
+
       Circle c;
       if (ss >> c.x >> c.y >> c.r) {
         c.uuid = shape_uuid;
         c.frame_id = frame;
         c.timestamp = node->now();
         c.cost_level = final_cost;
+        c.duration_seconds = final_duration;
 
         circles_[shape_uuid] = c;
 
-        RCLCPP_INFO(node->get_logger(),
-                    "Added CIRCLE [%s]: x=%.2f, y=%.2f, r=%.2f, cost=%d",
-                    shape_uuid.c_str(), c.x, c.y, c.r,
-                    static_cast<int>(final_cost));
+        RCLCPP_INFO(
+            logger_,
+            "Added CIRCLE [%s]: x=%.2f y=%.2f r=%.2f cost=%d duration=%s",
+            shape_uuid.c_str(), c.x, c.y, c.r, static_cast<int>(final_cost),
+            final_duration < 0
+                ? "infinite"
+                : (std::to_string(final_duration) + "s").c_str());
       }
     }
   }
-  // ===== Parse LINESTRING =====
-  // Format: LINESTRING(x1 y1, x2 y2) [THICKNESS:value]
+
+  // ============================================================
+  // LINESTRING
+  // ============================================================
   else if (wkt_upper.find("LINESTRING") == 0) {
     size_t start = wkt_trimmed.find("(");
     size_t end = wkt_trimmed.rfind(")");
 
     if (start != std::string::npos && end != std::string::npos && end > start) {
-      std::string coords = wkt_trimmed.substr(start + 1, end - start - 1);
-      auto points = parseCoordinates(coords);
+      auto points =
+          parseCoordinates(wkt_trimmed.substr(start + 1, end - start - 1));
 
       if (points.size() >= 2) {
         Line l;
@@ -317,84 +408,71 @@ void VirtualLayer::parseWKT(const std::string &wkt, const std::string &uuid,
         l.frame_id = frame;
         l.timestamp = node->now();
         l.cost_level = final_cost;
+        l.duration_seconds = final_duration;
+        l.thickness = thickness;
+
         l.x1 = points[0].first;
         l.y1 = points[0].second;
         l.x2 = points[1].first;
         l.y2 = points[1].second;
 
-        // Extract thickness from [THICKNESS:X] tag
-        l.thickness = 0.3; // default
-        size_t thick_pos = wkt_trimmed.find("[THICKNESS:");
-        if (thick_pos != std::string::npos) {
-          size_t thick_end = wkt_trimmed.find("]", thick_pos);
-          if (thick_end != std::string::npos) {
-            std::string thick_str =
-                wkt_trimmed.substr(thick_pos + 11, thick_end - thick_pos - 11);
-            try {
-              l.thickness = std::stod(trim(thick_str));
-            } catch (...) {
-              // Use default if parsing fails
-            }
-          }
-        }
-
         lines_[shape_uuid] = l;
 
-        RCLCPP_INFO(node->get_logger(),
-                    "Added LINESTRING [%s]: (%.2f,%.2f) to (%.2f,%.2f), "
-                    "thickness=%.2f, cost=%d",
+        RCLCPP_INFO(logger_,
+                    "Added LINESTRING [%s]: (%.2f,%.2f)->(%.2f,%.2f) "
+                    "thick=%.2f cost=%d duration=%s",
                     shape_uuid.c_str(), l.x1, l.y1, l.x2, l.y2, l.thickness,
-                    static_cast<int>(final_cost));
+                    static_cast<int>(final_cost),
+                    final_duration < 0
+                        ? "infinite"
+                        : (std::to_string(final_duration) + "s").c_str());
       }
     }
   }
 
-  // ===== Parse POLYGON =====
-  // Format: POLYGON(x1 y1, x2 y2, ...)      - open (line only)
-  //         POLYGON((), x1 y1, x2 y2, ...)  - filled
+  // ============================================================
+  // POLYGON
+  // ============================================================
   else if (wkt_upper.find("POLYGON") == 0) {
-    size_t open_paren = wkt_trimmed.find("(");
-    size_t close_paren = wkt_trimmed.rfind(")");
-    
-    if (open_paren != std::string::npos && close_paren != std::string::npos &&
-        close_paren > open_paren) {
-      std::string coords = wkt_trimmed.substr(open_paren + 1, close_paren - open_paren - 1);
-      
-      // Check for filled marker: (), at the beginning
+    size_t start = wkt_trimmed.find("(");
+    size_t end = wkt_trimmed.rfind(")");
+
+    if (start != std::string::npos && end != std::string::npos && end > start) {
+      std::string coords = wkt_trimmed.substr(start + 1, end - start - 1);
+
       bool is_filled = false;
       if (coords.find("(),") == 0 || coords.find("() ,") == 0) {
         is_filled = true;
-        size_t comma_pos = coords.find(',');
-        if (comma_pos != std::string::npos) {
-          coords = coords.substr(comma_pos + 1);
-          coords = trim(coords);
-        }
+        coords = trim(coords.substr(coords.find(',') + 1));
       }
 
       auto points = parseCoordinates(coords);
-
       if (points.size() >= 3) {
-        Polygon poly;
-        poly.uuid = shape_uuid;
-        poly.frame_id = frame;
-        poly.timestamp = node->now();
-        poly.cost_level = final_cost;
-        poly.is_filled = is_filled;
+        Polygon p;
+        p.uuid = shape_uuid;
+        p.frame_id = frame;
+        p.timestamp = node->now();
+        p.cost_level = final_cost;
+        p.duration_seconds = final_duration;
+        p.is_filled = is_filled;
 
-        for (const auto &p : points) {
-          geometry_msgs::msg::Point pt;
-          pt.x = p.first;
-          pt.y = p.second;
-          pt.z = 0.0;
-          poly.points.push_back(pt);
+        for (const auto &pt : points) {
+          geometry_msgs::msg::Point gp;
+          gp.x = pt.first;
+          gp.y = pt.second;
+          gp.z = 0.0;
+          p.points.push_back(gp);
         }
 
-        polygons_[shape_uuid] = poly;
+        polygons_[shape_uuid] = p;
 
-        RCLCPP_INFO(
-            node->get_logger(), "Added POLYGON [%s]: %zu points, %s, cost=%d",
-            shape_uuid.c_str(), points.size(), is_filled ? "filled" : "open",
-            static_cast<int>(final_cost));
+        RCLCPP_INFO(logger_,
+                    "Added POLYGON [%s]: %zu points %s cost=%d duration=%s",
+                    shape_uuid.c_str(), p.points.size(),
+                    is_filled ? "filled" : "open", static_cast<int>(final_cost),
+                    final_duration < 0
+                        ? "infinite"
+                        : (std::to_string(final_duration) + "s").c_str());
       }
     }
   }
@@ -406,61 +484,61 @@ void VirtualLayer::parseWKT(const std::string &wkt, const std::string &uuid,
 void VirtualLayer::onInitialize() {
   auto node = node_.lock();
 
-  // Declare parameters
+  logger_ = node->get_logger().get_child("virtual_layer");
+
   declareParameter("enabled", rclcpp::ParameterValue(true));
   declareParameter("forms", rclcpp::ParameterValue(std::vector<std::string>{}));
   declareParameter("forms_file", rclcpp::ParameterValue(""));
   declareParameter("line_thickness", rclcpp::ParameterValue(0.3));
   declareParameter("map_frame", rclcpp::ParameterValue("map"));
-  declareParameter("default_cost_level",
-                   rclcpp::ParameterValue(254)); // LETHAL by default
+  declareParameter("default_cost_level", rclcpp::ParameterValue(254));
+  declareParameter("expiration_check_frequency", rclcpp::ParameterValue(1.0));
 
-  // Load parameters
   enabled_ = node->get_parameter(name_ + ".enabled").as_bool();
   double default_thickness =
       node->get_parameter(name_ + ".line_thickness").as_double();
   map_frame_ = node->get_parameter(name_ + ".map_frame").as_string();
   int default_cost =
       node->get_parameter(name_ + ".default_cost_level").as_int();
+  double check_frequency =
+      node->get_parameter(name_ + ".expiration_check_frequency").as_double();
 
   tf_buffer_ = tf_;
 
-  // Load forms from external YAML file if specified
+  // Setup expiration timer
+  auto timer_period = std::chrono::duration<double>(1.0 / check_frequency);
+  expiration_timer_ = node->create_wall_timer(
+      timer_period, std::bind(&VirtualLayer::checkExpiredShapes, this));
+
   std::string forms_file =
       node->get_parameter(name_ + ".forms_file").as_string();
 
-  // ===== Load from external YAML file =====
   if (!forms_file.empty()) {
-
     std::string resolved_path = resolveFormsFilePath(forms_file);
 
     std::ifstream file_check(resolved_path);
     if (file_check.good()) {
-      RCLCPP_INFO(node->get_logger(), "Loading forms from external YAML: %s",
+      RCLCPP_INFO(logger_, "Loading forms from external YAML: %s",
                   resolved_path.c_str());
       loadFormsFromYAML(resolved_path);
     } else {
-      RCLCPP_ERROR(node->get_logger(),
-                   "Forms file not found: %s (resolved from: %s)",
+      RCLCPP_ERROR(logger_, "Forms file not found: %s (resolved from: %s)",
                    resolved_path.c_str(), forms_file.c_str());
     }
-  }
-
-  // ===== Load from parameters =====
-  else {
+  } else {
     auto forms = node->get_parameter(name_ + ".forms").as_string_array();
 
-    RCLCPP_INFO(node->get_logger(),
+    RCLCPP_INFO(logger_,
                 "Parsing %zu WKT forms from parameters in frame '%s' with "
                 "default cost %d...",
                 forms.size(), map_frame_.c_str(), default_cost);
 
     for (const auto &form : forms) {
-      parseWKT(form, "", map_frame_, static_cast<CostLevel>(default_cost));
+      parseWKT(form, "", map_frame_, static_cast<CostLevel>(default_cost),
+               -1.0);
     }
   }
 
-  // Set default thickness for lines
   {
     std::lock_guard<std::mutex> lock(shapes_mutex_);
     for (auto &[uuid, line] : lines_) {
@@ -468,16 +546,11 @@ void VirtualLayer::onInitialize() {
     }
   }
 
-  // =======================
   // Setup ROS2 Interfaces
-  // =======================
-
-  // Topic subscribers
   shape_sub_ = node->create_subscription<std_msgs::msg::String>(
-    "virtual_layer/shapes", 10,  
-    std::bind(&VirtualLayer::shapeCallback, this, std::placeholders::_1));
+      "virtual_layer/shapes", 10,
+      std::bind(&VirtualLayer::shapeCallback, this, std::placeholders::_1));
 
-  // Service servers
   add_circle_srv_ = node->create_service<nav2_virtual_layer::srv::AddCircle>(
       "virtual_layer/add_circle",
       std::bind(&VirtualLayer::addCircleCallback, this, std::placeholders::_1,
@@ -511,7 +584,7 @@ void VirtualLayer::onInitialize() {
 
   current_ = true;
 
-  RCLCPP_INFO(node->get_logger(),
+  RCLCPP_INFO(logger_,
               "VirtualLayer initialized: %zu circles, %zu lines, %zu polygons",
               circles_.size(), lines_.size(), polygons_.size());
 }
@@ -522,46 +595,59 @@ void VirtualLayer::onInitialize() {
 void VirtualLayer::addCircleCallback(
     const std::shared_ptr<nav2_virtual_layer::srv::AddCircle::Request> request,
     std::shared_ptr<nav2_virtual_layer::srv::AddCircle::Response> response) {
+
+  double final_duration = (request->duration != 0.0) ? request->duration : -1.0;
   std::string uuid =
       addCircle(request->x, request->y, request->radius,
                 request->frame_id.empty() ? map_frame_ : request->frame_id,
-                static_cast<CostLevel>(request->cost_level));
+                static_cast<CostLevel>(request->cost_level), final_duration);
 
   response->uuid = uuid;
   response->success = !uuid.empty();
 
   auto node = node_.lock();
-  RCLCPP_INFO(node->get_logger(), "Service added circle: %s", uuid.c_str());
+  RCLCPP_INFO(logger_, "Service added circle: %s (duration=%s)", uuid.c_str(),
+              final_duration < 0 ? "infinite"
+                                 : std::to_string(final_duration).c_str());
 }
 
 void VirtualLayer::addLineCallback(
     const std::shared_ptr<nav2_virtual_layer::srv::AddLine::Request> request,
     std::shared_ptr<nav2_virtual_layer::srv::AddLine::Response> response) {
+  double final_duration = (request->duration != 0.0) ? request->duration : -1.0;
+
   std::string uuid = addLine(
       request->x1, request->y1, request->x2, request->y2, request->thickness,
       request->frame_id.empty() ? map_frame_ : request->frame_id,
-      static_cast<CostLevel>(request->cost_level));
+      static_cast<CostLevel>(request->cost_level), final_duration);
 
   response->uuid = uuid;
   response->success = !uuid.empty();
 
   auto node = node_.lock();
-  RCLCPP_INFO(node->get_logger(), "Service added line: %s", uuid.c_str());
+  RCLCPP_INFO(logger_, "Service added line: %s (duration=%s)", uuid.c_str(),
+              final_duration < 0 ? "infinite"
+                                 : std::to_string(final_duration).c_str());
 }
 
 void VirtualLayer::addPolygonCallback(
     const std::shared_ptr<nav2_virtual_layer::srv::AddPolygon::Request> request,
     std::shared_ptr<nav2_virtual_layer::srv::AddPolygon::Response> response) {
+
+  double final_duration = (request->duration != 0.0) ? request->duration : -1.0;
+
   std::string uuid =
       addPolygon(request->points,
                  request->frame_id.empty() ? map_frame_ : request->frame_id,
-                 static_cast<CostLevel>(request->cost_level));
+                 static_cast<CostLevel>(request->cost_level), final_duration);
 
   response->uuid = uuid;
   response->success = !uuid.empty();
 
   auto node = node_.lock();
-  RCLCPP_INFO(node->get_logger(), "Service added polygon: %s", uuid.c_str());
+  RCLCPP_INFO(logger_, "Service added polygon: %s (duration=%s)", uuid.c_str(),
+              final_duration < 0 ? "infinite"
+                                 : std::to_string(final_duration).c_str());
 }
 
 void VirtualLayer::removeShapeCallback(
@@ -571,32 +657,27 @@ void VirtualLayer::removeShapeCallback(
   response->success = removeShape(request->uuid);
 
   auto node = node_.lock();
-  RCLCPP_INFO(node->get_logger(), "Service removed shape: %s (%s)",
-              request->uuid.c_str(),
+  RCLCPP_INFO(logger_, "Service removed shape: %s (%s)", request->uuid.c_str(),
               response->success ? "success" : "not found");
 }
 
 void VirtualLayer::clearAllCallback(
     const std::shared_ptr<std_srvs::srv::Trigger::Request>,
-    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
-{
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
   clearAllShapes();
 
   response->success = true;
   response->message = "All shapes cleared successfully";
 
   auto node = node_.lock();
-  RCLCPP_INFO(node->get_logger(), "%s", response->message.c_str());
+  RCLCPP_INFO(logger_, "%s", response->message.c_str());
 }
-
 
 void VirtualLayer::restoreDefaultsCallback(
     const std::shared_ptr<std_srvs::srv::Trigger::Request>,
-    std::shared_ptr<std_srvs::srv::Trigger::Response> response)
-{
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
   auto node = node_.lock();
 
-  // Clear all existing shapes
   clearAllShapes();
 
   bool success = true;
@@ -605,7 +686,6 @@ void VirtualLayer::restoreDefaultsCallback(
   std::string forms_file =
       node->get_parameter(name_ + ".forms_file").as_string();
 
-  // Restore from YAML file if specified
   if (!forms_file.empty()) {
     std::string resolved_path = resolveFormsFilePath(forms_file);
 
@@ -616,15 +696,14 @@ void VirtualLayer::restoreDefaultsCallback(
       success = false;
       msg = "Failed to resolve forms file path";
     }
-  } 
-  // Restore from parameters
-  else {
+  } else {
     auto forms = node->get_parameter(name_ + ".forms").as_string_array();
     int default_cost =
         node->get_parameter(name_ + ".default_cost_level").as_int();
 
     for (const auto &form : forms) {
-      parseWKT(form, "", map_frame_, static_cast<CostLevel>(default_cost));
+      parseWKT(form, "", map_frame_, static_cast<CostLevel>(default_cost),
+               -1.0);
     }
     msg = "Defaults restored from parameters";
   }
@@ -632,9 +711,7 @@ void VirtualLayer::restoreDefaultsCallback(
   response->success = success;
   response->message = msg;
 
-  RCLCPP_INFO(node->get_logger(),
-              "Restore defaults: %s (%s)",
-              msg.c_str(),
+  RCLCPP_INFO(logger_, "Restore defaults: %s (%s)", msg.c_str(),
               success ? "success" : "failed");
 }
 
@@ -642,14 +719,15 @@ void VirtualLayer::restoreDefaultsCallback(
 // Topic Callbacks
 // =======================
 void VirtualLayer::shapeCallback(const std_msgs::msg::String::SharedPtr msg) {
-  parseWKT(msg->data, "", map_frame_, COST_LETHAL);
+  parseWKT(msg->data, "", map_frame_, COST_LETHAL, -1.0);
 }
 
 // =======================
 // Add Shape Methods (Thread-Safe)
 // =======================
 std::string VirtualLayer::addCircle(double x, double y, double r,
-                                    const std::string &frame, CostLevel cost) {
+                                    const std::string &frame, CostLevel cost,
+                                    double duration) {
   std::lock_guard<std::mutex> lock(shapes_mutex_);
 
   Circle c;
@@ -657,6 +735,7 @@ std::string VirtualLayer::addCircle(double x, double y, double r,
   c.frame_id = frame;
   c.timestamp = node_.lock()->now();
   c.cost_level = cost;
+  c.duration_seconds = duration;
   c.x = x;
   c.y = y;
   c.r = r;
@@ -668,7 +747,7 @@ std::string VirtualLayer::addCircle(double x, double y, double r,
 
 std::string VirtualLayer::addLine(double x1, double y1, double x2, double y2,
                                   double thickness, const std::string &frame,
-                                  CostLevel cost) {
+                                  CostLevel cost, double duration) {
   std::lock_guard<std::mutex> lock(shapes_mutex_);
 
   Line l;
@@ -676,6 +755,7 @@ std::string VirtualLayer::addLine(double x1, double y1, double x2, double y2,
   l.frame_id = frame;
   l.timestamp = node_.lock()->now();
   l.cost_level = cost;
+  l.duration_seconds = duration;
   l.x1 = x1;
   l.y1 = y1;
   l.x2 = x2;
@@ -689,7 +769,8 @@ std::string VirtualLayer::addLine(double x1, double y1, double x2, double y2,
 
 std::string
 VirtualLayer::addPolygon(const std::vector<geometry_msgs::msg::Point> &points,
-                         const std::string &frame, CostLevel cost) {
+                         const std::string &frame, CostLevel cost,
+                         double duration) {
   std::lock_guard<std::mutex> lock(shapes_mutex_);
 
   Polygon poly;
@@ -697,6 +778,7 @@ VirtualLayer::addPolygon(const std::vector<geometry_msgs::msg::Point> &points,
   poly.frame_id = frame;
   poly.timestamp = node_.lock()->now();
   poly.cost_level = cost;
+  poly.duration_seconds = duration;
   poly.is_filled = false;
   poly.points = points;
 
@@ -767,7 +849,7 @@ bool VirtualLayer::transformPoint(double x_in, double y_in,
 
   if (tf_buffer_ == nullptr) {
     auto node = node_.lock();
-    RCLCPP_WARN_ONCE(node->get_logger(),
+    RCLCPP_WARN_ONCE(logger_,
                      "TF buffer not available, cannot transform points");
     return false;
   }
@@ -788,7 +870,7 @@ bool VirtualLayer::transformPoint(double x_in, double y_in,
     return true;
   } catch (tf2::TransformException &ex) {
     auto node = node_.lock();
-    RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 5000,
+    RCLCPP_WARN_THROTTLE(logger_, *node->get_clock(), 5000,
                          "Could not transform from %s to %s: %s",
                          map_frame_.c_str(), target_frame.c_str(), ex.what());
     return false;
@@ -893,12 +975,12 @@ void VirtualLayer::updateCosts(nav2_costmap_2d::Costmap2D &master_grid,
 }
 
 // =======================
-// Point in Polygon Test (Ray Casting Algorithm)
+// Point in Polygon Test
 // =======================
 bool VirtualLayer::pointInPolygon(double x, double y, const Polygon &poly) {
   int n = poly.points.size();
   bool inside = false;
-  
+
   // Ray casting algorithm
   for (int i = 0, j = n - 1; i < n; j = i++) {
     double xi = poly.points[i].x, yi = poly.points[i].y;
@@ -1027,9 +1109,7 @@ bool VirtualLayer::isInsideRestriction(double x, double y,
 // =======================
 // Reset
 // =======================
-void VirtualLayer::reset() { 
-  current_ = true; 
-}
+void VirtualLayer::reset() { current_ = true; }
 
 } // namespace nav2_virtual_layer
 

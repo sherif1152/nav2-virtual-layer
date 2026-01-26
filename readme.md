@@ -26,6 +26,7 @@ The layer exposes **multiple runtime** services that allow you to **add, remove,
 - ✅ Circles, lines, and polygons
 - ✅ Filled or open polygons
 - ✅ Per-shape cost levels
+- ✅ Time-based shape expiration
 - ✅ Runtime add/remove/clear
 - ✅ TF-aware (frame-safe)
 - ✅ Thread-safe
@@ -76,7 +77,7 @@ The plugin can be used in **global_costmap**, **local_costmap**, or both.
           # OPTION 1: Define shapes inline
           # ===============================
           # forms:
-          #   - "CIRCLE(2 3 0.5) [COST:254]"
+          #   - "CIRCLE(2 3 0.5) [COST:254] [DURATION:seconds]"
           #   - "LINESTRING(0 0, 5 5) [COST:200] [THICKNESS:0.3]"
           #   - "POLYGON((), 1 1, 4 1, 4 4, 1 4) [COST:128]"
 
@@ -207,15 +208,15 @@ Create an external YAML file to define virtual shapes that will be loaded by the
   # config/virtual_layer_forms.yaml
   forms:
     # A circular virtual obstacle
-    # Format: CIRCLE(x y radius) [COST:value]
-    - CIRCLE(5 -2 1.5) [COST:254]
+    # Format: CIRCLE(x y radius) [COST:value] [DURATION:seconds]
+    - CIRCLE(5 -2 1.5) [COST:254] [DURATION:10]
 
     # A virtual line obstacle
-    # Format: LINESTRING(x1 y1, x2 y2) [COST:value] [THICKNESS:value]
+    # Format: LINESTRING(x1 y1, x2 y2) [COST:value] [THICKNESS:value] [DURATION:seconds]
     - LINESTRING(0 0, 10 0) [COST:200] [THICKNESS:0.4]
 
     # A polygonal virtual obstacle
-    # Format: POLYGON(x1 y1, x2 y2, x3 y3, ...) [COST:value]
+    # Format: POLYGON(x1 y1, x2 y2, x3 y3, ...) [COST:value] [DURATION:seconds]
     # The polygon can be open or filled depending on the definition
     - POLYGON(0 0, 4 0, 4 3, 0 3) [COST:254]
   ```
@@ -232,14 +233,16 @@ ros2 launch my_robot_nav navigation_launch.py
 
 ## Configuration
 
-| Parameter            | Type     | Default | Description              |
-| -------------------- | -------- | ------- | ------------------------ |
-| `enabled`            | bool     | `true`  | Enable the layer         |
-| `map_frame`          | string   | `map`   | Default coordinate frame |
-| `line_thickness`     | double   | `0.3`   | Default line thickness   |
-| `default_cost_level` | int      | `254`   | Default cost             |
-| `forms`              | string[] | `[]`    | Inline WKT shapes        |
-| `forms_file`         | string   | `""`    | External YAML file       |
+
+| Parameter                      | Type     | Default | Description                           |
+| ------------------------------ | -------- | ------- | ------------------------------------- |
+| `enabled`                      | bool     | `true`  | Enable the layer                      |
+| `map_frame`                    | string   | `map`   | Default coordinate frame              |
+| `line_thickness`               | double   | `0.3`   | Default line thickness                |
+| `default_cost_level`           | int      | `254`   | Default cost                          |
+| `expiration_check_frequency`   | double   | `1.0`   | How often to check for expired shapes (Hz)  |
+| `forms`                        | string[] | `[]`    | Inline WKT shapes                     |
+| `forms_file`                   | string   | `""`    | External YAML file                    |
 
 ---
 
@@ -248,25 +251,25 @@ ros2 launch my_robot_nav navigation_launch.py
 - ### Circle
 
   ```yaml
-  CIRCLE(x y radius) [COST:n]
+  CIRCLE(x y radius) [COST:n] [DURATION:seconds]
   ```
 
 - ### Line
 
   ```yaml
-  LINESTRING(x1 y1, x2 y2) [COST:n] [THICKNESS:t]
+  LINESTRING(x1 y1, x2 y2) [COST:n] [THICKNESS:t] [DURATION:seconds]
   ```
 
 - ### Filled Polygon
 
   ```yaml
-  POLYGON((), x1 y1, x2 y2, x3 y3) [COST:n]
+  POLYGON((), x1 y1, x2 y2, x3 y3) [COST:n] [DURATION:seconds]
   ```
 
 - ### Open Polygon (Polyline)
 
   ```yaml
-  POLYGON(x1 y1, x2 y2, x3 y3) [COST:n]
+  POLYGON(x1 y1, x2 y2, x3 y3) [COST:n] [DURATION:seconds]
   ```
 
 ---
@@ -298,14 +301,14 @@ All services exist in:
 
 ## 🛠 VirtualLayer Services
 
-| Service Name                      | Service Type                         | Description                                                      | Request Fields                                                | Response Fields      |
-| --------------------------------- | ------------------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------- | -------------------- |
-| `/virtual_layer/add_circle`       | `nav2_virtual_layer/srv/AddCircle`   | Add a circular virtual obstacle to the costmap                   | `x`, `y`, `radius`, `frame_id`, `cost_level`                  | `uuid`, `success`    |
-| `/virtual_layer/add_line`         | `nav2_virtual_layer/srv/AddLine`     | Add a line virtual obstacle to the costmap                       | `x1`, `y1`, `x2`, `y2`, `thickness`, `frame_id`, `cost_level` | `uuid`, `success`    |
-| `/virtual_layer/add_polygon`      | `nav2_virtual_layer/srv/AddPolygon`  | Add a polygon virtual obstacle to the costmap                    | `points[]`, `frame_id`, `cost_level`                          | `uuid`, `success`    |
-| `/virtual_layer/remove_shape`     | `nav2_virtual_layer/srv/RemoveShape` | Remove a virtual shape using its UUID                            | `uuid`                                                        | `success`            |
-| `/virtual_layer/clear_all`        | `std_srvs/srv/Trigger`               | Remove all virtual shapes from the costmap                       | —                                                             | `success`, `message` |
-| `/virtual_layer/restore_defaults` | `std_srvs/srv/Trigger`               | Clear all shapes and reload default ones from parameters or file | —                                                             | `success`, `message` |
+| Service Name                      | Service Type                         | Description                                                      | Request Fields                                                   | Response Fields      |
+| --------------------------------- | ------------------------------------ | ---------------------------------------------------------------- | ---------------------------------------------------------------- | -------------------- |
+| `/virtual_layer/add_circle`       | `nav2_virtual_layer/srv/AddCircle`   | Add a circular virtual obstacle to the costmap                   | `x`, `y`, `radius`, `frame_id`, `cost_level`, `duration`         | `uuid`, `success`    |
+| `/virtual_layer/add_line`         | `nav2_virtual_layer/srv/AddLine`     | Add a line virtual obstacle to the costmap                       | `x1`, `y1`, `x2`, `y2`, `thickness`, `frame_id`, `cost_level`, `duration` | `uuid`, `success`    |
+| `/virtual_layer/add_polygon`      | `nav2_virtual_layer/srv/AddPolygon`  | Add a polygon virtual obstacle to the costmap                    | `points[]`, `frame_id`, `cost_level`, `duration`                 | `uuid`, `success`    |
+| `/virtual_layer/remove_shape`     | `nav2_virtual_layer/srv/RemoveShape` | Remove a virtual shape using its UUID                            | `uuid`                                                           | `success`            |
+| `/virtual_layer/clear_all`        | `std_srvs/srv/Trigger`               | Remove all virtual shapes from the costmap                       | —                                                                | `success`, `message` |
+| `/virtual_layer/restore_defaults` | `std_srvs/srv/Trigger`               | Clear all shapes and reload default ones from parameters or file | —                                                                | `success`, `message` |
 
 ---
 
@@ -315,7 +318,7 @@ All services exist in:
 
   ```bash
   ros2 service call /global_costmap/virtual_layer/add_circle nav2_virtual_layer/srv/AddCircle \
-  "{x: -7.0, y: -4.0, radius: 1.0, cost_level: 254}"
+  "{x: -7.0, y: -4.0, radius: 1.0, cost_level: 254, duration: 30.0}"
   ```
 
 - ### Add Line
@@ -334,7 +337,8 @@ All services exist in:
             {x: 3, y: 7},
             {x: 1, y: 2},
             {x: 1, y: -1}],
-    cost_level: 254}"
+    cost_level: 254, 
+    duration: 10.0}"
   ```
 
 - ### Remove Shape
@@ -385,7 +389,7 @@ The virtual_layer subscribes to the `shapes` topic for dynamic shape additions v
   ```bash
   ros2 topic pub --once \
   /global_costmap/virtual_layer/shapes std_msgs/msg/String \
-  "{data: 'LINESTRING(-1 -2, -5 -5) [COST:254] [THICKNESS:0.3]'}"
+  "{data: 'LINESTRING(-1 -2, -5 -5) [COST:254] [THICKNESS:0.3] [DURATION:30]'}"
   ```
 
 - ### Add Open Polygon via Topic
@@ -415,6 +419,11 @@ The virtual_layer subscribes to the `shapes` topic for dynamic shape additions v
 
 - If `[COST]` is missing → `default_cost_level` is used
 - If `[THICKNESS]` is missing → `line_thickness` is used
+- If `[DURATION]` is missing or 0 → shape persists forever
+- Negative duration values → shape persists forever
+- Expiration checks run at `expiration_check_frequency` (default: 1 Hz)
+  > Shapes with infinite duration are skipped efficiently during expiration checks and do not add noticeable overhead.
+
 - TF failure → shape is skipped safely
 - Overlapping shapes → highest cost wins
 - Polygons need ≥ 3 points
