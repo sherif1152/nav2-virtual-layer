@@ -161,17 +161,18 @@ The plugin can be used in **global_costmap**, **local_costmap**, or both.
   When the `virtual_layer` plugin is loaded and a `forms_file` is provided, the output will be:
 
   <pre style="font-size: 12px;">
-    [planner_server-4] [INFO] [1767520773.180575298] [global_costmap.global_costmap]: Using plugin "virtual_layer"
-    [planner_server-4] [INFO] [1767520773.185109413] [global_costmap.global_costmap]: Loading forms from external YAML: /home/sherif/robot_ws/install/rahal_navigation/share/rahal_navigation/config/virtual_layer_forms.yaml
-    [planner_server-4] [INFO] [1767520773.185159928] [global_costmap.global_costmap]: Reading forms from: /home/sherif/robot_ws/install/rahal_navigation/share/rahal_navigation/config/virtual_layer_forms.yaml
-    [planner_server-4] [INFO] [1767520773.185251680] [global_costmap.global_costmap]: Found 4 forms in YAML file
-    [planner_server-4] [INFO] [1767520773.185656156] [global_costmap.global_costmap]: Added CIRCLE [b6de4856-cd1c-4850-8cac-d98ee5b7bbaf]: x=2.00, y=1.00, r=1.00, cost=254
-    [planner_server-4] [INFO] [1767520773.186112104] [global_costmap.global_costmap]: Added LINESTRING [c7a3f5d8-c85b-40bb-ac94-153a317bb872]: (-0.77,4.80) to (-4.60,3.65), thickness=0.50, cost=254
-    [planner_server-4] [INFO] [1767520773.186524269] [global_costmap.global_costmap]: Added POLYGON [c4c1eaf9-7fc7-464d-a4d3-df25e2582c61]: 5 points, open, cost=254
-    [planner_server-4] [INFO] [1767520773.186623862] [global_costmap.global_costmap]: Added POLYGON [6de4fec7-8a2d-4a57-9f45-758d2e150338]: 4 points, filled, cost=250
-    [planner_server-4] [INFO] [1767520773.186668859] [global_costmap.global_costmap]: Successfully loaded: 1 circles, 1 lines, 2 polygons
-    [planner_server-4] [INFO] [1767520773.194889738] [global_costmap.global_costmap]: VirtualLayer initialized: 1 circles, 1 lines, 2 polygons
-    [planner_server-4] [INFO] [1767520773.194949434] [global_costmap.global_costmap]: Initialized plugin "virtual_layer"
+  [planner_server-4] [INFO] [1769427464.098922927] [global_costmap.global_costmap]: Using plugin "virtual_layer"
+  [planner_server-4] [INFO] [1769427464.104582515] [global_costmap.global_costmap.virtual_layer]: Loading forms from external YAML: /home/sherif/robot_ws/install/rahal_navigation/share/rahal_navigation/config/virtual_layer_forms.yaml
+  [planner_server-4] [INFO] [1769427464.104671886] [global_costmap.global_costmap.virtual_layer]: Reading forms from: /home/sherif/robot_ws/install/rahal_navigation/share/rahal_navigation/config/virtual_layer_forms.yaml
+  [planner_server-4] [INFO] [1769427464.104861404] [global_costmap.global_costmap.virtual_layer]: Found 4 forms in YAML file
+  [planner_server-4] [INFO] [1769427464.105288667] [global_costmap.global_costmap.virtual_layer]: Added CIRCLE [e0fc69e8-3620-4e5b-a877-82ac3eadd67a]: x=2.00 y=1.00 r=1.00 cost=254 duration=20.000000s
+  [planner_server-4] [INFO] [1769427464.105559301] [global_costmap.global_costmap.virtual_layer]: Added LINESTRING [ca77872a-697b-4f05-831e-0113abc22574]: (-0.77,4.80)->(-4.60,3.65) thick=0.50 cost=254 duration=20.000000s
+  [planner_server-4] [INFO] [1769427464.105903329] [global_costmap.global_costmap.virtual_layer]: Added POLYGON [94937464-c896-4db4-b5a8-bb2113caa122]: 5 points open cost=254 duration=infinite
+  [planner_server-4] [INFO] [1769427464.105976819] [global_costmap.global_costmap.virtual_layer]: Added POLYGON [a7ddc2ce-94ad-4705-b7ec-8d7adea1bd49]: 4 points filled cost=250 duration=infinite
+  [planner_server-4] [INFO] [1769427464.106010210] [global_costmap.global_costmap.virtual_layer]: Successfully loaded: 1 circles, 1 lines, 2 polygons
+  [planner_server-4] [INFO] [1769427464.125288905] [global_costmap.global_costmap.virtual_layer]: VirtualLayer initialized: 1 circles, 1 lines, 2 polygons
+  [planner_server-4] [INFO] [1769427464.125344285] [global_costmap.global_costmap]: Initialized plugin "virtual_layer"
+
     
   </pre>
 
@@ -413,6 +414,20 @@ The virtual_layer subscribes to the `shapes` topic for dynamic shape additions v
 **Note:** Shapes added via topic use the WKT format and support all cost level and geometry options.
 
 ---
+
+### Expected Expiration Output
+
+When shapes are added with a finite `[DURATION]`, the virtual layer periodically checks for expired shapes.
+Once a shape expires, it is automatically removed and logged.
+
+Example output when shapes expire:
+
+<pre style="font-size: 12px;">
+[planner_server-4] [INFO] [1769427367.450081331] [global_costmap.global_costmap.virtual_layer]: Removed expired CIRCLE [f203dd4d-9b04-48ef-b343-2210df3b44f8]
+[planner_server-4] [INFO] [1769427367.450137195] [global_costmap.global_costmap.virtual_layer]: Removed expired LINE [833e9c85-b972-43c7-9e6e-462464c71552]
+[planner_server-4] [INFO] [1769427367.450145899] [global_costmap.global_costmap.virtual_layer]: Removed 2 expired shape(s)
+</pre>
+
 
 
 ## Notes and Edge Cases
