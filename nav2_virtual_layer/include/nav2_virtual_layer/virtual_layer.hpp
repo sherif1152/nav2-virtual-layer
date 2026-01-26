@@ -134,7 +134,9 @@ private:
   bool enabled_;              ///< Whether the layer is enabled
   std::string map_frame_;     ///< Reference frame for shapes
   tf2_ros::Buffer* tf_buffer_; ///< TF buffer for coordinate transformations
-  
+  rclcpp::Logger logger_{rclcpp::get_logger("nav2_virtual_layer")}; ///< Logger for the layer
+
+
   // ===== Thread Safety =====
   mutable std::mutex shapes_mutex_;  ///< Mutex for thread-safe shape access
 
@@ -150,10 +152,25 @@ private:
     std::string frame_id;     ///< Reference frame
     rclcpp::Time timestamp;   ///< Time of creation/addition
     CostLevel cost_level;     ///< Cost level of the shape
+    double duration_seconds;  ///< Duration in seconds (-1.0 = infinite)
     
     ShapeBase() 
       : frame_id("map"), 
-        cost_level(COST_LETHAL) {}
+        cost_level(COST_LETHAL),
+        duration_seconds(-1.0) {}
+    
+    /**
+     * @brief Check if shape has expired
+     * @param current_time Current ROS time
+     * @return true if shape should be removed
+     */
+    bool isExpired(const rclcpp::Time& current_time) const {
+      if (duration_seconds <= 0.0) {
+        return false; // Infinite duration
+      }
+      double elapsed = (current_time - timestamp).seconds();
+      return elapsed >= duration_seconds;
+    }
   };
 
   /**
@@ -189,6 +206,9 @@ private:
   std::unordered_map<std::string, Polygon> polygons_; ///< Stored polygons by UUID
   std::unordered_map<std::string, Circle> circles_;   ///< Stored circles by UUID
   std::unordered_map<std::string, Line> lines_;       ///< Stored lines by UUID
+
+  // ===== Timer for Expiration Checking =====
+  rclcpp::TimerBase::SharedPtr expiration_timer_; ///< Timer to check for expired shapes
 
   // ===== ROS2 Communication Interfaces =====
   
@@ -254,24 +274,33 @@ private:
    */
   void shapeCallback(const std_msgs::msg::String::SharedPtr msg);
 
+  // ===== Timer Callbacks =====
+  
+  /**
+   * @brief Check and remove expired shapes
+   */
+  void checkExpiredShapes();
+
   // ===== Helper Methods =====
   
   /**
    * @brief Parse Well-Known Text (WKT) string to create shapes
    * 
    * Supports the following formats:
-   * - CIRCLE(x y radius) [COST:value]
-   * - LINESTRING(x1 y1, x2 y2) [THICKNESS:value] [COST:value]
-   * - POLYGON(x1 y1, x2 y2, ...) - open polygon (outline only)
-   * - POLYGON((), x1 y1, x2 y2, ...) - filled polygon
+   * - CIRCLE(x y radius) [COST:value] [DURATION:seconds]
+   * - LINESTRING(x1 y1, x2 y2) [THICKNESS:value] [COST:value] [DURATION:seconds]
+   * - POLYGON(x1 y1, x2 y2, ...) [COST:value] [DURATION:seconds] - open polygon
+   * - POLYGON((), x1 y1, x2 y2, ...) [COST:value] [DURATION:seconds] - filled polygon
    * 
    * @param wkt WKT-formatted string
    * @param uuid Optional UUID (generated if empty)
    * @param frame Reference frame for the shape
    * @param cost Default cost level if not specified in WKT
+   * @param duration Duration in seconds (-1.0 = infinite)
    */
   void parseWKT(const std::string& wkt, const std::string& uuid = "", 
-                const std::string& frame = "map", CostLevel cost = COST_LETHAL);
+                const std::string& frame = "map", CostLevel cost = COST_LETHAL,
+                double duration = -1.0);
   
   /**
    * @brief Generate a unique identifier (UUID v4)
@@ -304,11 +333,13 @@ private:
    * @param r Radius
    * @param frame Reference frame
    * @param cost Cost level
+   * @param duration Duration in seconds (-1.0 = infinite)
    * @return UUID of created shape
    */
   std::string addCircle(double x, double y, double r, 
                         const std::string& frame = "map",
-                        CostLevel cost = COST_LETHAL);
+                        CostLevel cost = COST_LETHAL,
+                        double duration = -1.0);
   
   /**
    * @brief Add a line shape programmatically
@@ -319,22 +350,26 @@ private:
    * @param thickness Line thickness
    * @param frame Reference frame
    * @param cost Cost level
+   * @param duration Duration in seconds (-1.0 = infinite)
    * @return UUID of created shape
    */
   std::string addLine(double x1, double y1, double x2, double y2, double thickness,
                       const std::string& frame = "map",
-                      CostLevel cost = COST_LETHAL);
+                      CostLevel cost = COST_LETHAL,
+                      double duration = -1.0);
   
   /**
    * @brief Add a polygon shape programmatically
    * @param points Vertices of the polygon
    * @param frame Reference frame
    * @param cost Cost level
+   * @param duration Duration in seconds (-1.0 = infinite)
    * @return UUID of created shape
    */
   std::string addPolygon(const std::vector<geometry_msgs::msg::Point>& points,
                          const std::string& frame = "map",
-                         CostLevel cost = COST_LETHAL);
+                         CostLevel cost = COST_LETHAL,
+                         double duration = -1.0);
   
   /**
    * @brief Remove a shape by UUID

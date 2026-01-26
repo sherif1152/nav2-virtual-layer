@@ -1,8 +1,12 @@
-# Request
-geometry_msgs/Point[] points
-string frame_id
-uint8 cost_level
+# Service to add a polygon shape to the virtual layer
+#
+# Request:
+geometry_msgs/Point[] points   # Vertices of the polygon
+string frame_id                # Reference frame (empty = use layer default)
+uint8 cost_level               # Cost level (254=LETHAL, 253=HIGH, 200=MEDIUM, 50=LOW)
+float64 duration               # Duration in seconds (-1.0 = infinite, default)
+
 ---
-# Response
-string uuid
-bool success
+# Response:
+string uuid                    # Unique identifier of the created shape
+bool success                   # Whether the operation succeeded
