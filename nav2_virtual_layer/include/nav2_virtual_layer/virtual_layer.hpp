@@ -19,6 +19,8 @@
 #include "tf2_ros/buffer.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "visualization_msgs/msg/marker.hpp"
+#include "visualization_msgs/msg/marker_array.hpp"
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 
@@ -135,10 +137,22 @@ private:
   std::string map_frame_;     ///< Reference frame for shapes
   tf2_ros::Buffer* tf_buffer_; ///< TF buffer for coordinate transformations
   rclcpp::Logger logger_{rclcpp::get_logger("nav2_virtual_layer")}; ///< Logger for the layer
-
+  std::string current_yaml_path_;  ///< Path to currently loaded YAML file  
 
   // ===== Thread Safety =====
   mutable std::mutex shapes_mutex_;  ///< Mutex for thread-safe shape access
+
+  // ===== Shape ID Management =====
+  int next_shape_id_;  ///< Counter for auto-incrementing shape IDs
+  std::unordered_map<int, std::string> id_to_uuid_;  ///< Map from shape ID to UUID
+  std::unordered_map<std::string, int> uuid_to_id_;  ///< Map from UUID to shape ID
+
+  // ===== Visualization =====
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_pub_;
+  rclcpp::TimerBase::SharedPtr visualization_timer_;
+  bool enable_visualization_;
+  double text_height_;
+  std_msgs::msg::ColorRGBA text_color_;
 
   // ===== Shape Structures =====
   
@@ -149,13 +163,15 @@ private:
    */
   struct ShapeBase {
     std::string uuid;         ///< Unique identifier
+    int shape_id;             ///< Numeric ID for easy reference
     std::string frame_id;     ///< Reference frame
     rclcpp::Time timestamp;   ///< Time of creation/addition
     CostLevel cost_level;     ///< Cost level of the shape
     double duration_seconds;  ///< Duration in seconds (-1.0 = infinite)
     
     ShapeBase() 
-      : frame_id("map"), 
+      : shape_id(-1),
+        frame_id("map"), 
         cost_level(COST_LETHAL),
         duration_seconds(-1.0) {}
     
@@ -221,6 +237,7 @@ private:
   rclcpp::Service<nav2_virtual_layer::srv::RemoveShape>::SharedPtr remove_shape_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_all_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr restore_shapes_srv_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reload_shapes_srv_;
 
   // ===== Service Callbacks =====
   
@@ -246,7 +263,7 @@ private:
     std::shared_ptr<nav2_virtual_layer::srv::AddPolygon::Response> response);
   
   /**
-   * @brief Service callback to remove a shape by UUID
+   * @brief Service callback to remove a shape by UUID or ID
    */
   void removeShapeCallback(
     const std::shared_ptr<nav2_virtual_layer::srv::RemoveShape::Request> request,
@@ -265,6 +282,14 @@ private:
   void restoreDefaultsCallback(
     const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
     std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+
+  /**
+  * @brief Service callback to reload shapes from YAML file
+  */
+  void reloadShapesCallback(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+
 
   // ===== Topic Callbacks =====
   
@@ -287,26 +312,55 @@ private:
    * @brief Parse Well-Known Text (WKT) string to create shapes
    * 
    * Supports the following formats:
-   * - CIRCLE(x y radius) [COST:value] [DURATION:seconds]
-   * - LINESTRING(x1 y1, x2 y2) [THICKNESS:value] [COST:value] [DURATION:seconds]
-   * - POLYGON(x1 y1, x2 y2, ...) [COST:value] [DURATION:seconds] - open polygon
-   * - POLYGON((), x1 y1, x2 y2, ...) [COST:value] [DURATION:seconds] - filled polygon
+   * - CIRCLE(x y radius) [ID:N] [COST:value] [DURATION:seconds]
+   * - LINESTRING(x1 y1, x2 y2) [ID:N] [THICKNESS:value] [COST:value] [DURATION:seconds]
+   * - POLYGON(x1 y1, x2 y2, ...) [ID:N] [COST:value] [DURATION:seconds] - open polygon
+   * - POLYGON((), x1 y1, x2 y2, ...) [ID:N] [COST:value] [DURATION:seconds] - filled polygon
    * 
    * @param wkt WKT-formatted string
    * @param uuid Optional UUID (generated if empty)
    * @param frame Reference frame for the shape
    * @param cost Default cost level if not specified in WKT
    * @param duration Duration in seconds (-1.0 = infinite)
+   * @param requested_id Optional shape ID (auto-assigned if -1)
    */
   void parseWKT(const std::string& wkt, const std::string& uuid = "", 
                 const std::string& frame = "map", CostLevel cost = COST_LETHAL,
-                double duration = -1.0);
+                double duration = -1.0, int requested_id = -1);
   
   /**
    * @brief Generate a unique identifier (UUID v4)
    * @return UUID string
    */
   std::string generateUUID();
+
+  /**
+   * @brief Assign a shape ID and register it
+   * @param uuid Shape UUID
+   * @param requested_id Optional requested ID (-1 for auto-assign)
+   * @return Assigned shape ID
+   */
+  int assignShapeID(const std::string& uuid, int requested_id = -1);
+
+  /**
+   * @brief Unregister a shape ID
+   * @param uuid Shape UUID
+   */
+  void unregisterShapeID(const std::string& uuid);
+
+  /**
+   * @brief Get UUID from shape ID
+   * @param shape_id Numeric shape ID
+   * @return UUID string or empty if not found
+   */
+  std::string getUUIDFromID(int shape_id) const;
+
+  /**
+   * @brief Get shape ID from UUID
+   * @param uuid Shape UUID
+   * @return Shape ID or -1 if not found
+   */
+  int getIDFromUUID(const std::string& uuid) const;
 
   // ===== Shape Management Methods =====
   
@@ -334,12 +388,14 @@ private:
    * @param frame Reference frame
    * @param cost Cost level
    * @param duration Duration in seconds (-1.0 = infinite)
+   * @param requested_id Optional shape ID (-1 for auto-assign)
    * @return UUID of created shape
    */
   std::string addCircle(double x, double y, double r, 
                         const std::string& frame = "map",
                         CostLevel cost = COST_LETHAL,
-                        double duration = -1.0);
+                        double duration = -1.0,
+                        int requested_id = -1);
   
   /**
    * @brief Add a line shape programmatically
@@ -351,12 +407,14 @@ private:
    * @param frame Reference frame
    * @param cost Cost level
    * @param duration Duration in seconds (-1.0 = infinite)
+   * @param requested_id Optional shape ID (-1 for auto-assign)
    * @return UUID of created shape
    */
   std::string addLine(double x1, double y1, double x2, double y2, double thickness,
                       const std::string& frame = "map",
                       CostLevel cost = COST_LETHAL,
-                      double duration = -1.0);
+                      double duration = -1.0,
+                      int requested_id = -1);
   
   /**
    * @brief Add a polygon shape programmatically
@@ -364,19 +422,21 @@ private:
    * @param frame Reference frame
    * @param cost Cost level
    * @param duration Duration in seconds (-1.0 = infinite)
+   * @param requested_id Optional shape ID (-1 for auto-assign)
    * @return UUID of created shape
    */
   std::string addPolygon(const std::vector<geometry_msgs::msg::Point>& points,
                          const std::string& frame = "map",
                          CostLevel cost = COST_LETHAL,
-                         double duration = -1.0);
+                         double duration = -1.0,
+                         int requested_id = -1);
   
   /**
-   * @brief Remove a shape by UUID
-   * @param uuid Shape identifier
+   * @brief Remove a shape by UUID or ID
+   * @param identifier Shape UUID or numeric ID (as string)
    * @return true if shape was found and removed
    */
-  bool removeShape(const std::string& uuid);
+  bool removeShape(const std::string& identifier);
   
   /**
    * @brief Clear all shapes from the layer
@@ -427,6 +487,19 @@ private:
    */
   bool pointInPolygon(double x, double y, const Polygon &poly);
   
+  /**
+  * @brief Publish visualization markers for RViz
+  */
+  void publishVisualizationMarkers();
+
+  /**
+  * @brief Create text marker for shape ID
+  */
+  visualization_msgs::msg::Marker createTextMarker(
+    int id, const std::string& text, 
+    double x, double y, double z,
+    const std::string& frame_id);
+    
 };
 
 }  // namespace nav2_virtual_layer

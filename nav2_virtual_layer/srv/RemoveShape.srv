@@ -1,5 +1,5 @@
 # Request
-string uuid
+string identifier  # UUID or numeric shape ID
 ---
-# Response
 bool success
+string message     # optional, for feedback

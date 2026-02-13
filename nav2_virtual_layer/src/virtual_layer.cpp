@@ -16,7 +16,7 @@ namespace nav2_virtual_layer {
 // Constructor
 // =======================
 VirtualLayer::VirtualLayer()
-    : enabled_(true), map_frame_("map"), tf_buffer_(nullptr) {}
+    : enabled_(true), map_frame_("map"), tf_buffer_(nullptr), next_shape_id_(1) {}
 
 // =======================
 // UUID Generator
@@ -37,6 +37,48 @@ std::string VirtualLayer::generateUUID() {
     }
   }
   return uuid;
+}
+
+// =======================
+// Shape ID Management
+// =======================
+int VirtualLayer::assignShapeID(const std::string& uuid, int requested_id) {
+  int assigned_id;
+  
+  if (requested_id > 0 && id_to_uuid_.find(requested_id) == id_to_uuid_.end()) {
+    // Use requested ID if available
+    assigned_id = requested_id;
+    if (requested_id >= next_shape_id_) {
+      next_shape_id_ = requested_id + 1;
+    }
+  } else {
+    // Auto-assign next available ID
+    assigned_id = next_shape_id_++;
+  }
+  
+  id_to_uuid_[assigned_id] = uuid;
+  uuid_to_id_[uuid] = assigned_id;
+  
+  return assigned_id;
+}
+
+void VirtualLayer::unregisterShapeID(const std::string& uuid) {
+  auto it = uuid_to_id_.find(uuid);
+  if (it != uuid_to_id_.end()) {
+    int shape_id = it->second;
+    id_to_uuid_.erase(shape_id);
+    uuid_to_id_.erase(it);
+  }
+}
+
+std::string VirtualLayer::getUUIDFromID(int shape_id) const {
+  auto it = id_to_uuid_.find(shape_id);
+  return (it != id_to_uuid_.end()) ? it->second : "";
+}
+
+int VirtualLayer::getIDFromUUID(const std::string& uuid) const {
+  auto it = uuid_to_id_.find(uuid);
+  return (it != uuid_to_id_.end()) ? it->second : -1;
 }
 
 // =======================
@@ -63,17 +105,17 @@ void VirtualLayer::checkExpiredShapes() {
 
   rclcpp::Time current_time = node->now();
 
-  // {uuid, type}
-  std::vector<std::pair<std::string, std::string>> expired_shapes;
+  // {uuid, type, id}
+  std::vector<std::tuple<std::string, std::string, int>> expired_shapes;
 
   // =====================
   // Check expired circles
   // =====================
   for (const auto &[uuid, circle] : circles_) {
     if (circle.isExpired(current_time)) {
-      expired_shapes.emplace_back(uuid, "CIRCLE");
-      RCLCPP_DEBUG(logger_, "Circle [%s] expired after %.1f seconds",
-                   uuid.c_str(), circle.duration_seconds);
+      expired_shapes.emplace_back(uuid, "CIRCLE", circle.shape_id);
+      RCLCPP_DEBUG(logger_, "Circle [ID:%d, UUID:%s] expired after %.1f seconds",
+                   circle.shape_id, uuid.c_str(), circle.duration_seconds);
     }
   }
 
@@ -82,9 +124,9 @@ void VirtualLayer::checkExpiredShapes() {
   // =====================
   for (const auto &[uuid, line] : lines_) {
     if (line.isExpired(current_time)) {
-      expired_shapes.emplace_back(uuid, "LINE");
-      RCLCPP_DEBUG(logger_, "Line [%s] expired after %.1f seconds",
-                   uuid.c_str(), line.duration_seconds);
+      expired_shapes.emplace_back(uuid, "LINE", line.shape_id);
+      RCLCPP_DEBUG(logger_, "Line [ID:%d, UUID:%s] expired after %.1f seconds",
+                   line.shape_id, uuid.c_str(), line.duration_seconds);
     }
   }
 
@@ -93,21 +135,23 @@ void VirtualLayer::checkExpiredShapes() {
   // =====================
   for (const auto &[uuid, polygon] : polygons_) {
     if (polygon.isExpired(current_time)) {
-      expired_shapes.emplace_back(uuid, "POLYGON");
-      RCLCPP_DEBUG(logger_, "Polygon [%s] expired after %.1f seconds",
-                   uuid.c_str(), polygon.duration_seconds);
+      expired_shapes.emplace_back(uuid, "POLYGON", polygon.shape_id);
+      RCLCPP_DEBUG(logger_, "Polygon [ID:%d, UUID:%s] expired after %.1f seconds",
+                   polygon.shape_id, uuid.c_str(), polygon.duration_seconds);
     }
   }
 
   // =====================
   // Remove expired shapes
   // =====================
-  for (const auto &[uuid, type] : expired_shapes) {
+  for (const auto &[uuid, type, shape_id] : expired_shapes) {
+    unregisterShapeID(uuid);
     circles_.erase(uuid);
     lines_.erase(uuid);
     polygons_.erase(uuid);
 
-    RCLCPP_INFO(logger_, "Removed expired %s [%s]", type.c_str(), uuid.c_str());
+    RCLCPP_INFO(logger_, "Removed expired %s [ID:%d, UUID:%s]", 
+                type.c_str(), shape_id, uuid.c_str());
   }
 
   // =====================
@@ -240,7 +284,7 @@ void VirtualLayer::loadFormsFromYAML(const std::string &yaml_path) {
   RCLCPP_INFO(logger_, "Found %zu forms in YAML file", forms.size());
 
   for (const auto &form : forms) {
-    parseWKT(form, "", map_frame_, static_cast<CostLevel>(default_cost), -1.0);
+    parseWKT(form, "", map_frame_, static_cast<CostLevel>(default_cost), -1.0, -1);
   }
 
   RCLCPP_INFO(logger_,
@@ -285,11 +329,11 @@ parseCoordinates(const std::string &coords_str) {
 }
 
 // =======================
-// WKT Parser (Enhanced with Duration Support)
+// WKT Parser (Enhanced with Duration and ID Support)
 // =======================
 void VirtualLayer::parseWKT(const std::string &wkt, const std::string &uuid,
                             const std::string &frame, CostLevel cost,
-                            double duration) {
+                            double duration, int requested_id) {
   std::lock_guard<std::mutex> lock(shapes_mutex_);
 
   auto node = node_.lock();
@@ -305,6 +349,7 @@ void VirtualLayer::parseWKT(const std::string &wkt, const std::string &uuid,
   CostLevel final_cost = cost;
   double final_duration = duration;
   double thickness = 0.3;
+  int final_id = requested_id;
 
   // =====================
   // 2) Extract TAGS (order independent)
@@ -320,6 +365,14 @@ void VirtualLayer::parseWKT(const std::string &wkt, const std::string &uuid,
 
     return trim(wkt_trimmed.substr(pos + tag.size(), end - pos - tag.size()));
   };
+
+  // ID
+  if (auto val = extract_tag("[ID:"); val.has_value()) {
+    try {
+      final_id = std::stoi(*val);
+    } catch (...) {
+    }
+  }
 
   // COST
   if (auto val = extract_tag("[COST:"); val.has_value()) {
@@ -373,6 +426,7 @@ void VirtualLayer::parseWKT(const std::string &wkt, const std::string &uuid,
       Circle c;
       if (ss >> c.x >> c.y >> c.r) {
         c.uuid = shape_uuid;
+        c.shape_id = assignShapeID(shape_uuid, final_id);
         c.frame_id = frame;
         c.timestamp = node->now();
         c.cost_level = final_cost;
@@ -382,8 +436,8 @@ void VirtualLayer::parseWKT(const std::string &wkt, const std::string &uuid,
 
         RCLCPP_INFO(
             logger_,
-            "Added CIRCLE [%s]: x=%.2f y=%.2f r=%.2f cost=%d duration=%s",
-            shape_uuid.c_str(), c.x, c.y, c.r, static_cast<int>(final_cost),
+            "Added CIRCLE [UUID:%s] [ID:%d]: x=%.2f y=%.2f r=%.2f cost=%d duration=%s",
+            c.uuid.c_str(), c.shape_id, c.x, c.y, c.r, static_cast<int>(final_cost),
             final_duration < 0
                 ? "infinite"
                 : (std::to_string(final_duration) + "s").c_str());
@@ -405,6 +459,7 @@ void VirtualLayer::parseWKT(const std::string &wkt, const std::string &uuid,
       if (points.size() >= 2) {
         Line l;
         l.uuid = shape_uuid;
+        l.shape_id = assignShapeID(shape_uuid, final_id);
         l.frame_id = frame;
         l.timestamp = node->now();
         l.cost_level = final_cost;
@@ -419,9 +474,9 @@ void VirtualLayer::parseWKT(const std::string &wkt, const std::string &uuid,
         lines_[shape_uuid] = l;
 
         RCLCPP_INFO(logger_,
-                    "Added LINESTRING [%s]: (%.2f,%.2f)->(%.2f,%.2f) "
+                    "Added LINESTRING [UUID:%s] [ID:%d]: (%.2f,%.2f)->(%.2f,%.2f) "
                     "thick=%.2f cost=%d duration=%s",
-                    shape_uuid.c_str(), l.x1, l.y1, l.x2, l.y2, l.thickness,
+                    l.uuid.c_str(), l.shape_id, l.x1, l.y1, l.x2, l.y2, l.thickness,
                     static_cast<int>(final_cost),
                     final_duration < 0
                         ? "infinite"
@@ -450,6 +505,7 @@ void VirtualLayer::parseWKT(const std::string &wkt, const std::string &uuid,
       if (points.size() >= 3) {
         Polygon p;
         p.uuid = shape_uuid;
+        p.shape_id = assignShapeID(shape_uuid, final_id);
         p.frame_id = frame;
         p.timestamp = node->now();
         p.cost_level = final_cost;
@@ -467,8 +523,8 @@ void VirtualLayer::parseWKT(const std::string &wkt, const std::string &uuid,
         polygons_[shape_uuid] = p;
 
         RCLCPP_INFO(logger_,
-                    "Added POLYGON [%s]: %zu points %s cost=%d duration=%s",
-                    shape_uuid.c_str(), p.points.size(),
+                    "Added POLYGON [UUID:%s] [ID:%d]: %zu points %s cost=%d duration=%s",
+                    p.uuid.c_str(), p.shape_id, p.points.size(),
                     is_filled ? "filled" : "open", static_cast<int>(final_cost),
                     final_duration < 0
                         ? "infinite"
@@ -494,6 +550,15 @@ void VirtualLayer::onInitialize() {
   declareParameter("default_cost_level", rclcpp::ParameterValue(254));
   declareParameter("expiration_check_frequency", rclcpp::ParameterValue(1.0));
 
+  // ===== Visualization Parameters =====
+  declareParameter("enable_visualization", rclcpp::ParameterValue(true));
+  declareParameter("visualization_rate", rclcpp::ParameterValue(2.0));
+  declareParameter("text_height", rclcpp::ParameterValue(0.5));
+  declareParameter("text_color_r", rclcpp::ParameterValue(0.0));
+  declareParameter("text_color_g", rclcpp::ParameterValue(0.0));
+  declareParameter("text_color_b", rclcpp::ParameterValue(0.0));
+  declareParameter("text_color_a", rclcpp::ParameterValue(1.0));
+
   enabled_ = node->get_parameter(name_ + ".enabled").as_bool();
   double default_thickness =
       node->get_parameter(name_ + ".line_thickness").as_double();
@@ -502,6 +567,15 @@ void VirtualLayer::onInitialize() {
       node->get_parameter(name_ + ".default_cost_level").as_int();
   double check_frequency =
       node->get_parameter(name_ + ".expiration_check_frequency").as_double();
+
+  enable_visualization_ = node->get_parameter(name_ + ".enable_visualization").as_bool();
+  double viz_rate = node->get_parameter(name_ + ".visualization_rate").as_double();
+  text_height_ = node->get_parameter(name_ + ".text_height").as_double();
+  
+  text_color_.r = node->get_parameter(name_ + ".text_color_r").as_double();
+  text_color_.g = node->get_parameter(name_ + ".text_color_g").as_double();
+  text_color_.b = node->get_parameter(name_ + ".text_color_b").as_double();
+  text_color_.a = node->get_parameter(name_ + ".text_color_a").as_double();
 
   tf_buffer_ = tf_;
 
@@ -514,18 +588,19 @@ void VirtualLayer::onInitialize() {
       node->get_parameter(name_ + ".forms_file").as_string();
 
   if (!forms_file.empty()) {
-    std::string resolved_path = resolveFormsFilePath(forms_file);
-
-    std::ifstream file_check(resolved_path);
+    current_yaml_path_ = resolveFormsFilePath(forms_file);
+    
+    std::ifstream file_check(current_yaml_path_);
     if (file_check.good()) {
       RCLCPP_INFO(logger_, "Loading forms from external YAML: %s",
-                  resolved_path.c_str());
-      loadFormsFromYAML(resolved_path);
+                  current_yaml_path_.c_str());
+      loadFormsFromYAML(current_yaml_path_);
     } else {
       RCLCPP_ERROR(logger_, "Forms file not found: %s (resolved from: %s)",
-                   resolved_path.c_str(), forms_file.c_str());
+                  current_yaml_path_.c_str(), forms_file.c_str());
+      current_yaml_path_.clear();
     }
-  } else {
+  }else {
     auto forms = node->get_parameter(name_ + ".forms").as_string_array();
 
     RCLCPP_INFO(logger_,
@@ -535,7 +610,7 @@ void VirtualLayer::onInitialize() {
 
     for (const auto &form : forms) {
       parseWKT(form, "", map_frame_, static_cast<CostLevel>(default_cost),
-               -1.0);
+               -1.0, -1);
     }
   }
 
@@ -582,11 +657,215 @@ void VirtualLayer::onInitialize() {
       std::bind(&VirtualLayer::restoreDefaultsCallback, this,
                 std::placeholders::_1, std::placeholders::_2));
 
+  reload_shapes_srv_ = node->create_service<std_srvs::srv::Trigger>(
+    "virtual_layer/reload_shapes",
+    std::bind(&VirtualLayer::reloadShapesCallback, this,
+              std::placeholders::_1, std::placeholders::_2));
+
+  if (enable_visualization_) {
+    marker_pub_ = node->create_publisher<visualization_msgs::msg::MarkerArray>(
+        "virtual_layer/shape_markers", 10);
+    
+    auto viz_period = std::chrono::duration<double>(1.0 / viz_rate);
+    visualization_timer_ = node->create_wall_timer(
+        viz_period, std::bind(&VirtualLayer::publishVisualizationMarkers, this));
+    
+    RCLCPP_INFO(logger_, "Visualization enabled at %.1f Hz", viz_rate);
+  }
+
   current_ = true;
 
   RCLCPP_INFO(logger_,
               "VirtualLayer initialized: %zu circles, %zu lines, %zu polygons",
               circles_.size(), lines_.size(), polygons_.size());
+}
+
+// =======================
+// Shape Management Methods
+// =======================
+std::string VirtualLayer::addCircle(double x, double y, double r,
+                                    const std::string& frame,
+                                    CostLevel cost,
+                                    double duration,
+                                    int requested_id) {
+  std::lock_guard<std::mutex> lock(shapes_mutex_);
+  
+  auto node = node_.lock();
+  if (!node) {
+    return "";
+  }
+
+  std::string uuid = generateUUID();
+  
+  Circle c;
+  c.uuid = uuid;
+  c.shape_id = assignShapeID(uuid, requested_id);
+  c.x = x;
+  c.y = y;
+  c.r = r;
+  c.frame_id = frame;
+  c.cost_level = cost;
+  c.duration_seconds = duration;
+  c.timestamp = node->now();
+
+  circles_[uuid] = c;
+
+  RCLCPP_INFO(logger_,
+              "Added Circle [ID:%d]: (%.2f, %.2f) r=%.2f cost=%d duration=%s",
+              c.shape_id, x, y, r, static_cast<int>(cost),
+              duration < 0 ? "infinite" : (std::to_string(duration) + "s").c_str());
+
+  return uuid;
+}
+
+std::string VirtualLayer::addLine(double x1, double y1, double x2, double y2,
+                                   double thickness, const std::string& frame,
+                                   CostLevel cost, double duration,
+                                   int requested_id) {
+  std::lock_guard<std::mutex> lock(shapes_mutex_);
+  
+  auto node = node_.lock();
+  if (!node) {
+    return "";
+  }
+
+  std::string uuid = generateUUID();
+  
+  Line l;
+  l.uuid = uuid;
+  l.shape_id = assignShapeID(uuid, requested_id);
+  l.x1 = x1;
+  l.y1 = y1;
+  l.x2 = x2;
+  l.y2 = y2;
+  l.thickness = thickness;
+  l.frame_id = frame;
+  l.cost_level = cost;
+  l.duration_seconds = duration;
+  l.timestamp = node->now();
+
+  lines_[uuid] = l;
+
+  RCLCPP_INFO(logger_,
+              "Added Line [ID:%d]: (%.2f,%.2f)->(%.2f,%.2f) thick=%.2f cost=%d duration=%s",
+              l.shape_id, x1, y1, x2, y2, thickness, static_cast<int>(cost),
+              duration < 0 ? "infinite" : (std::to_string(duration) + "s").c_str());
+
+  return uuid;
+}
+
+std::string VirtualLayer::addPolygon(const std::vector<geometry_msgs::msg::Point>& points,
+                                     const std::string& frame,
+                                     CostLevel cost, double duration,
+                                     int requested_id) {
+  std::lock_guard<std::mutex> lock(shapes_mutex_);
+  
+  auto node = node_.lock();
+  if (!node) {
+    return "";
+  }
+
+  std::string uuid = generateUUID();
+  
+  Polygon p;
+  p.uuid = uuid;
+  p.shape_id = assignShapeID(uuid, requested_id);
+  p.points = points;
+  p.frame_id = frame;
+  p.cost_level = cost;
+  p.duration_seconds = duration;
+  p.timestamp = node->now();
+
+  polygons_[uuid] = p;
+
+  RCLCPP_INFO(logger_,
+              "Added Polygon [ID:%d]: %zu points cost=%d duration=%s",
+              p.shape_id, points.size(), static_cast<int>(cost),
+              duration < 0 ? "infinite" : (std::to_string(duration) + "s").c_str());
+
+  return uuid;
+}
+
+bool VirtualLayer::removeShape(const std::string& identifier) {
+  std::lock_guard<std::mutex> lock(shapes_mutex_);
+
+  std::string uuid = identifier;
+  bool removed = false;
+  int shape_id = -1;
+  std::string shape_type;
+
+  //  Try direct UUID removal first
+  auto try_remove_by_uuid = [&](const std::string& id) -> bool {
+    if (circles_.erase(id) > 0) {
+      shape_type = "Circle";
+      shape_id = getIDFromUUID(id);
+      return true;
+    }
+    if (lines_.erase(id) > 0) {
+      shape_type = "Line";
+      shape_id = getIDFromUUID(id);
+      return true;
+    }
+    if (polygons_.erase(id) > 0) {
+      shape_type = "Polygon";
+      shape_id = getIDFromUUID(id);
+      return true;
+    }
+    return false;
+  };
+
+  removed = try_remove_by_uuid(uuid);
+
+  // If not removed, try as numeric ID
+  if (!removed) {
+    bool is_number = !identifier.empty() &&
+                     std::all_of(identifier.begin(), identifier.end(), ::isdigit);
+
+    if (is_number) {
+      int numeric_id = std::stoi(identifier);
+      std::string mapped_uuid = getUUIDFromID(numeric_id);
+
+      if (!mapped_uuid.empty()) {
+        removed = try_remove_by_uuid(mapped_uuid);
+        uuid = mapped_uuid;
+        shape_id = numeric_id;
+      }
+    }
+  }
+
+
+  // Final result
+  if (removed) {
+    unregisterShapeID(uuid);
+
+    RCLCPP_INFO(logger_,
+                "Removed %s [ID:%d, UUID:%s]",
+                shape_type.c_str(),
+                shape_id,
+                uuid.c_str());
+  } else {
+    RCLCPP_WARN(logger_,
+                "No shape found with identifier: %s",
+                identifier.c_str());
+  }
+
+  return removed;
+}
+
+
+void VirtualLayer::clearAllShapes() {
+  std::lock_guard<std::mutex> lock(shapes_mutex_);
+  
+  size_t total = circles_.size() + lines_.size() + polygons_.size();
+  
+  circles_.clear();
+  lines_.clear();
+  polygons_.clear();
+  id_to_uuid_.clear();
+  uuid_to_id_.clear();
+  next_shape_id_ = 1;
+
+  RCLCPP_INFO(logger_, "Cleared all shapes (%zu total)", total);
 }
 
 // =======================
@@ -604,11 +883,10 @@ void VirtualLayer::addCircleCallback(
 
   response->uuid = uuid;
   response->success = !uuid.empty();
-
-  auto node = node_.lock();
-  RCLCPP_INFO(logger_, "Service added circle: %s (duration=%s)", uuid.c_str(),
-              final_duration < 0 ? "infinite"
-                                 : std::to_string(final_duration).c_str());
+  
+  if (response->success) {
+    response->shape_id = getIDFromUUID(uuid);
+  }
 }
 
 void VirtualLayer::addLineCallback(
@@ -623,215 +901,133 @@ void VirtualLayer::addLineCallback(
 
   response->uuid = uuid;
   response->success = !uuid.empty();
-
-  auto node = node_.lock();
-  RCLCPP_INFO(logger_, "Service added line: %s (duration=%s)", uuid.c_str(),
-              final_duration < 0 ? "infinite"
-                                 : std::to_string(final_duration).c_str());
+  
+  if (response->success) {
+    response->shape_id = getIDFromUUID(uuid);
+  }
 }
 
 void VirtualLayer::addPolygonCallback(
     const std::shared_ptr<nav2_virtual_layer::srv::AddPolygon::Request> request,
     std::shared_ptr<nav2_virtual_layer::srv::AddPolygon::Response> response) {
-
+  
   double final_duration = (request->duration != 0.0) ? request->duration : -1.0;
 
-  std::string uuid =
-      addPolygon(request->points,
-                 request->frame_id.empty() ? map_frame_ : request->frame_id,
-                 static_cast<CostLevel>(request->cost_level), final_duration);
+  std::string uuid = addPolygon(
+      request->points,
+      request->frame_id.empty() ? map_frame_ : request->frame_id,
+      static_cast<CostLevel>(request->cost_level), final_duration);
 
   response->uuid = uuid;
   response->success = !uuid.empty();
-
-  auto node = node_.lock();
-  RCLCPP_INFO(logger_, "Service added polygon: %s (duration=%s)", uuid.c_str(),
-              final_duration < 0 ? "infinite"
-                                 : std::to_string(final_duration).c_str());
+  
+  if (response->success) {
+    response->shape_id = getIDFromUUID(uuid);
+  }
 }
 
 void VirtualLayer::removeShapeCallback(
-    const std::shared_ptr<nav2_virtual_layer::srv::RemoveShape::Request>
-        request,
+    const std::shared_ptr<nav2_virtual_layer::srv::RemoveShape::Request> request,
     std::shared_ptr<nav2_virtual_layer::srv::RemoveShape::Response> response) {
-  response->success = removeShape(request->uuid);
-
-  auto node = node_.lock();
-  RCLCPP_INFO(logger_, "Service removed shape: %s (%s)", request->uuid.c_str(),
-              response->success ? "success" : "not found");
+  
+  response->success = removeShape(request->identifier);
+  
+  if (response->success) {
+    response->message = "Shape removed successfully";
+  } else {
+    response->message = "Shape not found: " + request->identifier;
+  }
 }
 
 void VirtualLayer::clearAllCallback(
-    const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
     std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+  
   clearAllShapes();
-
   response->success = true;
-  response->message = "All shapes cleared successfully";
-
-  auto node = node_.lock();
-  RCLCPP_INFO(logger_, "%s", response->message.c_str());
+  response->message = "All shapes cleared";
 }
 
 void VirtualLayer::restoreDefaultsCallback(
-    const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
     std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+  
+  clearAllShapes();
+  
+  // Reload from YAML or parameters
   auto node = node_.lock();
+  if (!node) {
+    response->success = false;
+    response->message = "Failed to get node";
+    return;
+  }
+  
+  std::string forms_file = node->get_parameter(name_ + ".forms_file").as_string();
+  
+  if (!forms_file.empty()) {
+    std::string resolved_path = resolveFormsFilePath(forms_file);
+    loadFormsFromYAML(resolved_path);
+  }
+  
+  response->success = true;
+  response->message = "Default shapes restored";
+}
+
+
+void VirtualLayer::reloadShapesCallback(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+  
+  auto node = node_.lock();
+  if (!node) {
+    response->success = false;
+    response->message = "Failed to get node";
+    return;
+  }
+
+  if (current_yaml_path_.empty()) {
+    response->success = false;
+    response->message = "No YAML file was loaded initially. Cannot reload.";
+    RCLCPP_WARN(logger_, "%s", response->message.c_str());
+    return;
+  }
+
+  std::ifstream file_check(current_yaml_path_);
+  if (!file_check.good()) {
+    response->success = false;
+    response->message = "YAML file not found: " + current_yaml_path_;
+    RCLCPP_ERROR(logger_, "%s", response->message.c_str());
+    return;
+  }
+  file_check.close();
+
+  RCLCPP_INFO(logger_, "Reloading shapes from YAML: %s", current_yaml_path_.c_str());
+
+  size_t old_count = circles_.size() + lines_.size() + polygons_.size();
 
   clearAllShapes();
 
-  bool success = true;
-  std::string msg;
+  loadFormsFromYAML(current_yaml_path_);
 
-  std::string forms_file =
-      node->get_parameter(name_ + ".forms_file").as_string();
+  size_t new_count = circles_.size() + lines_.size() + polygons_.size();
 
-  if (!forms_file.empty()) {
-    std::string resolved_path = resolveFormsFilePath(forms_file);
-
-    if (!resolved_path.empty()) {
-      loadFormsFromYAML(resolved_path);
-      msg = "Defaults restored from YAML file";
-    } else {
-      success = false;
-      msg = "Failed to resolve forms file path";
-    }
-  } else {
-    auto forms = node->get_parameter(name_ + ".forms").as_string_array();
-    int default_cost =
-        node->get_parameter(name_ + ".default_cost_level").as_int();
-
-    for (const auto &form : forms) {
-      parseWKT(form, "", map_frame_, static_cast<CostLevel>(default_cost),
-               -1.0);
-    }
-    msg = "Defaults restored from parameters";
-  }
-
-  response->success = success;
-  response->message = msg;
-
-  RCLCPP_INFO(logger_, "Restore defaults: %s (%s)", msg.c_str(),
-              success ? "success" : "failed");
+  response->success = true;
+  response->message = "Shapes reloaded successfully from " + current_yaml_path_ + 
+                      " (Old: " + std::to_string(old_count) + 
+                      " shapes, New: " + std::to_string(new_count) + " shapes)";
+  
+  RCLCPP_INFO(logger_, "%s", response->message.c_str());
+  RCLCPP_INFO(logger_, "Current shapes: %zu circles, %zu lines, %zu polygons",
+              circles_.size(), lines_.size(), polygons_.size());
 }
 
-// =======================
-// Topic Callbacks
-// =======================
 void VirtualLayer::shapeCallback(const std_msgs::msg::String::SharedPtr msg) {
-  parseWKT(msg->data, "", map_frame_, COST_LETHAL, -1.0);
-}
-
-// =======================
-// Add Shape Methods (Thread-Safe)
-// =======================
-std::string VirtualLayer::addCircle(double x, double y, double r,
-                                    const std::string &frame, CostLevel cost,
-                                    double duration) {
-  std::lock_guard<std::mutex> lock(shapes_mutex_);
-
-  Circle c;
-  c.uuid = generateUUID();
-  c.frame_id = frame;
-  c.timestamp = node_.lock()->now();
-  c.cost_level = cost;
-  c.duration_seconds = duration;
-  c.x = x;
-  c.y = y;
-  c.r = r;
-
-  circles_[c.uuid] = c;
-
-  return c.uuid;
-}
-
-std::string VirtualLayer::addLine(double x1, double y1, double x2, double y2,
-                                  double thickness, const std::string &frame,
-                                  CostLevel cost, double duration) {
-  std::lock_guard<std::mutex> lock(shapes_mutex_);
-
-  Line l;
-  l.uuid = generateUUID();
-  l.frame_id = frame;
-  l.timestamp = node_.lock()->now();
-  l.cost_level = cost;
-  l.duration_seconds = duration;
-  l.x1 = x1;
-  l.y1 = y1;
-  l.x2 = x2;
-  l.y2 = y2;
-  l.thickness = thickness;
-
-  lines_[l.uuid] = l;
-
-  return l.uuid;
-}
-
-std::string
-VirtualLayer::addPolygon(const std::vector<geometry_msgs::msg::Point> &points,
-                         const std::string &frame, CostLevel cost,
-                         double duration) {
-  std::lock_guard<std::mutex> lock(shapes_mutex_);
-
-  Polygon poly;
-  poly.uuid = generateUUID();
-  poly.frame_id = frame;
-  poly.timestamp = node_.lock()->now();
-  poly.cost_level = cost;
-  poly.duration_seconds = duration;
-  poly.is_filled = false;
-  poly.points = points;
-
-  polygons_[poly.uuid] = poly;
-
-  return poly.uuid;
-}
-
-// =======================
-// Remove Shape (Thread-Safe)
-// =======================
-bool VirtualLayer::removeShape(const std::string &uuid) {
-  std::lock_guard<std::mutex> lock(shapes_mutex_);
-
-  // Try to remove from each shape container
-  if (circles_.erase(uuid) > 0)
-    return true;
-  if (lines_.erase(uuid) > 0)
-    return true;
-  if (polygons_.erase(uuid) > 0)
-    return true;
-
-  return false;
-}
-
-void VirtualLayer::clearAllShapes() {
-  std::lock_guard<std::mutex> lock(shapes_mutex_);
-
-  circles_.clear();
-  lines_.clear();
-  polygons_.clear();
-}
-
-// =======================
-// Get Shape Info
-// =======================
-size_t VirtualLayer::getShapeCount() const {
-  std::lock_guard<std::mutex> lock(shapes_mutex_);
-  return circles_.size() + lines_.size() + polygons_.size();
-}
-
-std::vector<std::string> VirtualLayer::getAllShapeUUIDs() const {
-  std::lock_guard<std::mutex> lock(shapes_mutex_);
-
-  std::vector<std::string> uuids;
-  for (const auto &[uuid, _] : circles_)
-    uuids.push_back(uuid);
-  for (const auto &[uuid, _] : lines_)
-    uuids.push_back(uuid);
-  for (const auto &[uuid, _] : polygons_)
-    uuids.push_back(uuid);
-
-  return uuids;
+  RCLCPP_INFO(logger_, "Received WKT shape: %s", msg->data.c_str());
+  
+  auto node = node_.lock();
+  int default_cost = node->get_parameter(name_ + ".default_cost_level").as_int();
+  
+  parseWKT(msg->data, "", map_frame_, static_cast<CostLevel>(default_cost), -1.0, -1);
 }
 
 // =======================
@@ -1104,6 +1300,108 @@ bool VirtualLayer::isInsideRestriction(double x, double y,
 
   cost_out = max_cost;
   return max_cost > 0;
+}
+
+// =======================
+// Create Text Marker
+// =======================
+visualization_msgs::msg::Marker VirtualLayer::createTextMarker(
+    int id, const std::string& text, 
+    double x, double y, double z,
+    const std::string& frame_id) {
+  
+  visualization_msgs::msg::Marker marker;
+  marker.header.frame_id = frame_id;
+  marker.header.stamp = rclcpp::Time();
+  marker.ns = "shape_ids";
+  marker.id = id;
+  marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+  marker.action = visualization_msgs::msg::Marker::ADD;
+  
+  marker.pose.position.x = x;
+  marker.pose.position.y = y;
+  marker.pose.position.z = z;
+  marker.pose.orientation.w = 1.0;
+  
+  marker.scale.z = text_height_;  // Text height
+  
+  marker.color = text_color_;
+  
+  marker.text = text;
+  marker.lifetime = rclcpp::Duration(std::chrono::milliseconds(1000));
+  
+  return marker;
+}
+
+// =======================
+// Publish Visualization Markers
+// =======================
+void VirtualLayer::publishVisualizationMarkers() {
+  if (!enable_visualization_ || !marker_pub_) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(shapes_mutex_);
+  
+  visualization_msgs::msg::MarkerArray marker_array;
+  
+  // =====================
+  // Circles
+  // =====================
+  for (const auto &[uuid, circle] : circles_) {
+    double cx = circle.x;
+    double cy = circle.y;
+    double z = 0.5;  // Height above ground for smooth visibility
+    
+    std::string text = "ID:" + std::to_string(circle.shape_id);
+    auto marker = createTextMarker(circle.shape_id, text, cx, cy, z, circle.frame_id);
+    marker_array.markers.push_back(marker);
+  }
+  
+  // =====================
+  // Lines - Show ID at midpoint
+  // =====================
+  for (const auto &[uuid, line] : lines_) {
+    double mx = (line.x1 + line.x2) / 2.0;
+    double my = (line.y1 + line.y2) / 2.0;
+    double z = 0.5;
+    
+    std::string text = "ID:" + std::to_string(line.shape_id);
+    auto marker = createTextMarker(
+        line.shape_id + 10000,  // Offset to avoid ID collision
+        text, mx, my, z, line.frame_id);
+    marker_array.markers.push_back(marker);
+  }
+  
+  // =====================
+  // Polygons - Show ID at centroid
+  // =====================
+  for (const auto &[uuid, poly] : polygons_) {
+    if (poly.points.empty()) continue;
+    
+    // Calculate centroid
+    double cx = 0.0, cy = 0.0;
+    for (const auto &pt : poly.points) {
+      cx += pt.x;
+      cy += pt.y;
+    }
+    cx /= poly.points.size();
+    cy /= poly.points.size();
+    double z = 0.5;
+    
+    std::string text = "ID:" + std::to_string(poly.shape_id);
+    auto marker = createTextMarker(
+        poly.shape_id + 20000,  // Offset to avoid ID collision
+        text, cx, cy, z, poly.frame_id);
+    marker_array.markers.push_back(marker);
+  }
+  
+  // =====================
+  // Publish all markers
+  // =====================
+  if (!marker_array.markers.empty()) {
+    marker_pub_->publish(marker_array);
+  }
 }
 
 // =======================

@@ -23,17 +23,21 @@ The layer exposes **multiple runtime** services that allow you to **add, remove,
 
 ## Features
 
-- ✅ Circles, lines, and polygons
-- ✅ Filled or open polygons
-- ✅ Per-shape cost levels
-- ✅ Time-based shape expiration
-- ✅ Runtime add/remove/clear
-- ✅ TF-aware (frame-safe)
-- ✅ Thread-safe
-- ✅ YAML, parameters, services, and topics
-- ✅ Works with **global_costmap** and **local_costmap**
+- ✅ **Geometric Shapes**: Circles, lines, and polygons
+- ✅ **Flexible Polygons**: Filled or open (polyline) polygons
+- ✅ **Cost Control**: Per-shape cost levels (1-254)
+- ✅ **Time-Based Expiration**: Automatic removal after duration
+- ✅ **Shape ID System**: Unique numeric IDs for easy management
+- ✅ **Runtime Management**: Add/remove/clear shapes via services
+- ✅ **Visual Feedback**: RViz2 marker visualization with shape IDs
+- ✅ **TF-Aware**: Multi-frame support with automatic transformations
+- ✅ **Thread-Safe**: Concurrent access protection
+- ✅ **Multiple Input Methods**: YAML files, ROS parameters, services, and topics
+- ✅ **Hot Reload**: Reload shapes from YAML without restart
+- ✅ **Dual Costmap Support**: Works with **global_costmap** and **local_costmap**
 
 ---
+
 
 ## Installation
 
@@ -54,173 +58,208 @@ source install/setup.bash
 
 The plugin can be used in **global_costmap**, **local_costmap**, or both.
 
+#### Global Costmap Configuration
 
-- ### Global Costmap
-
-  ```yaml
+```yaml
+global_costmap:
   global_costmap:
-    global_costmap:
-      ros__parameters:
-        plugins:
-          - static_layer
-          - obstacle_layer
-          - virtual_layer
-          - inflation_layer
+    ros__parameters:
+      plugins:
+        - static_layer
+        - obstacle_layer
+        - virtual_layer
+        - inflation_layer
 
-        virtual_layer:
-          plugin: "nav2_virtual_layer::VirtualLayer"
-          enabled: true
-          map_frame: map
-          default_cost_level: 254
+      virtual_layer:
+        plugin: "nav2_virtual_layer::VirtualLayer"
+        enabled: true
+        map_frame: map
+        default_cost_level: 254
+        
+        # ===============================
+        # OPTION 1: Define shapes inline
+        # ===============================
+        # forms:
+        #   - "CIRCLE(2 3 0.5) [COST:254] [ID:1]"
+        #   - "LINESTRING(0 0, 5 5) [COST:200] [THICKNESS:0.3] [ID:2]"
+        #   - "POLYGON((), 1 1, 4 1, 4 4, 1 4) [COST:128] [ID:3]"
 
-          # ===============================
-          # OPTION 1: Define shapes inline
-          # ===============================
-          # forms:
-          #   - "CIRCLE(2 3 0.5) [COST:254] [DURATION:seconds]"
-          #   - "LINESTRING(0 0, 5 5) [COST:200] [THICKNESS:0.3]"
-          #   - "POLYGON((), 1 1, 4 1, 4 4, 1 4) [COST:128]"
+        # ==================================
+        # OPTION 2: Load shapes from a file
+        # ==================================
+        forms_file: "package://my_robot_nav/config/virtual_layer_forms.yaml"
+        
+        # 👉 You can use OPTION 1 OR OPTION 2
+        # 👉 Only ONE source is used
+```
 
-          # ==================================
-          # OPTION 2: Load shapes from a file
-          # ==================================
-          # forms_file: "package://my_robot_nav/config/virtual_layer_forms.yaml"
+<details>
+<summary><strong>Example 1: Define shapes inline (OPTION 1)</strong></summary>
 
-          # 👉 You can use OPTION 1 OR OPTION 2
-          # 👉 If forms_file is set, it OVERRIDES forms
-          # 👉 Only ONE source is used
-  ```
-
-  <details>
-   <summary> <strong> Example 1: Define shapes inline (OPTION 1)</strong> </summary>
-
-  ```yaml
+```yaml
+global_costmap:
   global_costmap:
-    global_costmap:
-      ros__parameters:
-        plugins:
-          - static_layer
-          - obstacle_layer
-          - virtual_layer
-          - inflation_layer
+    ros__parameters:
+      plugins:
+        - static_layer
+        - obstacle_layer
+        - virtual_layer
+        - inflation_layer
 
-        virtual_layer:
-          plugin: "nav2_virtual_layer::VirtualLayer"
-          enabled: true
-          map_frame: map
-          default_cost_level: 254
+      virtual_layer:
+        plugin: "nav2_virtual_layer::VirtualLayer"
+        enabled: true
+        map_frame: map
+        default_cost_level: 254
+        
+        enable_visualization: true
+        visualization_rate: 2.0
 
-          forms:
-            - "CIRCLE(2 3 0.5) [COST:254]"
-            - "LINESTRING(0 0, 5 5) [COST:200] [THICKNESS:0.3]"
-            - "POLYGON((1 1, 4 1, 4 4, 1 4)) [COST:128]"
-  ```
+        forms:
+          - "CIRCLE(2 3 0.5) [COST:254] [ID:1]"
+          - "LINESTRING(0 0, 5 5) [COST:200] [THICKNESS:0.3] [ID:2]"
+          - "POLYGON((1 1, 4 1, 4 4, 1 4)) [COST:128] [ID:3]"
+```
 
-  </details>
+</details>
 
-  <details>
-  <summary> <strong> Example 2: Load shapes from file (OPTION 2) </strong></summary>
+<details>
+<summary><strong>Example 2: Load shapes from file (OPTION 2)</strong></summary>
 
-  ```yaml
-  global_costmap:
-    global_costmap:
-      ros__parameters:
-        plugins:
-          - static_layer
-          - obstacle_layer
-          - virtual_layer
-          - inflation_layer
+**Using package:// URI:**
+```yaml
+virtual_layer:
+  plugin: "nav2_virtual_layer::VirtualLayer"
+  enabled: true
+  map_frame: map
+  default_cost_level: 254
+  
+  enable_visualization: true
 
-        virtual_layer:
-          plugin: "nav2_virtual_layer::VirtualLayer"
-          enabled: true
-          map_frame: map
-          default_cost_level: 254
+  forms_file: "package://my_robot_nav/config/virtual_layer_forms.yaml"
+```
 
-          forms_file: "package://my_robot_nav/config/virtual_layer_forms.yaml"
-  ```
+**Using absolute path:**
+```yaml
+virtual_layer:
+  plugin: "nav2_virtual_layer::VirtualLayer"
+  enabled: true
+  map_frame: map
+  default_cost_level: 254
 
-  ```yaml
-  virtual_layer:
-    plugin: "nav2_virtual_layer::VirtualLayer"
-    enabled: true
-    map_frame: map
-    default_cost_level: 254
+  forms_file: "/home/user/robot_ws/src/my_robot_nav/config/virtual_layer_forms.yaml"
+```
 
-    forms_file: "/home/user/robot_ws/src/my_robot_nav/config/virtual_layer_forms.yaml"
-  ```
-
-  </details>
-
-  ***
-
-  ✅ `forms_file` is recommended for large projects
-
-  ✅ Expected Output
-
-  When the `virtual_layer` plugin is loaded and a `forms_file` is provided, the output will be:
-
-  <pre style="font-size: 12px;">
-  [planner_server-4] [INFO] [1769427464.098922927] [global_costmap.global_costmap]: Using plugin "virtual_layer"
-  [planner_server-4] [INFO] [1769427464.104582515] [global_costmap.global_costmap.virtual_layer]: Loading forms from external YAML: /home/sherif/robot_ws/install/rahal_navigation/share/rahal_navigation/config/virtual_layer_forms.yaml
-  [planner_server-4] [INFO] [1769427464.104671886] [global_costmap.global_costmap.virtual_layer]: Reading forms from: /home/sherif/robot_ws/install/rahal_navigation/share/rahal_navigation/config/virtual_layer_forms.yaml
-  [planner_server-4] [INFO] [1769427464.104861404] [global_costmap.global_costmap.virtual_layer]: Found 4 forms in YAML file
-  [planner_server-4] [INFO] [1769427464.105288667] [global_costmap.global_costmap.virtual_layer]: Added CIRCLE [e0fc69e8-3620-4e5b-a877-82ac3eadd67a]: x=2.00 y=1.00 r=1.00 cost=254 duration=20.000000s
-  [planner_server-4] [INFO] [1769427464.105559301] [global_costmap.global_costmap.virtual_layer]: Added LINESTRING [ca77872a-697b-4f05-831e-0113abc22574]: (-0.77,4.80)->(-4.60,3.65) thick=0.50 cost=254 duration=20.000000s
-  [planner_server-4] [INFO] [1769427464.105903329] [global_costmap.global_costmap.virtual_layer]: Added POLYGON [94937464-c896-4db4-b5a8-bb2113caa122]: 5 points open cost=254 duration=infinite
-  [planner_server-4] [INFO] [1769427464.105976819] [global_costmap.global_costmap.virtual_layer]: Added POLYGON [a7ddc2ce-94ad-4705-b7ec-8d7adea1bd49]: 4 points filled cost=250 duration=infinite
-  [planner_server-4] [INFO] [1769427464.106010210] [global_costmap.global_costmap.virtual_layer]: Successfully loaded: 1 circles, 1 lines, 2 polygons
-  [planner_server-4] [INFO] [1769427464.125288905] [global_costmap.global_costmap.virtual_layer]: VirtualLayer initialized: 1 circles, 1 lines, 2 polygons
-  [planner_server-4] [INFO] [1769427464.125344285] [global_costmap.global_costmap]: Initialized plugin "virtual_layer"
-
-    
-  </pre>
-
-  ---
-
-- ### Optional: Enable Also in Local Costmap
-
-  ```yaml
-  local_costmap:
-    local_costmap:
-      ros__parameters:
-        plugins:
-          - obstacle_layer
-          - virtual_layer
-          - inflation_layer
-
-        virtual_layer:
-          plugin: "nav2_virtual_layer::VirtualLayer"
-          enabled: true
-          map_frame: map
-  ```
-
-  📌 Same configuration style
+</details>
 
 ---
 
-### Step 2: Example External Shapes File
+✅ `forms_file` is recommended for large projects
 
-Create an external YAML file to define virtual shapes that will be loaded by the virtual_layer plugin.
 
-- ### 📄 File: config/virtual_layer_forms.yaml
+
+#### Expected Output
+
+When the `virtual_layer` plugin is loaded with a `forms_file`, you'll see:
+
+```
+[planner_server-4] [INFO] [timestamp] [global_costmap.global_costmap]: Using plugin "virtual_layer"
+[planner_server-4] [INFO] [timestamp] [global_costmap.global_costmap.virtual_layer]: Loading forms from external YAML: /path/to/virtual_layer_forms.yaml
+[planner_server-4] [INFO] [timestamp] [global_costmap.global_costmap.virtual_layer]: Reading forms from: /path/to/virtual_layer_forms.yaml
+[planner_server-4] [INFO] [timestamp] [global_costmap.global_costmap.virtual_layer]: Found 4 forms in YAML file
+[planner_server-4] [INFO] [timestamp] [global_costmap.global_costmap.virtual_layer]: Added CIRCLE [ID:1]: x=2.00 y=1.00 r=1.00 cost=254 duration=20.0s
+[planner_server-4] [INFO] [timestamp] [global_costmap.global_costmap.virtual_layer]: Added LINESTRING [ID:2]: (-0.77,4.80)->(-4.60,3.65) thick=0.50 cost=254 duration=20.0s
+[planner_server-4] [INFO] [timestamp] [global_costmap.global_costmap.virtual_layer]: Added POLYGON [ID:3]: 5 points open cost=254 duration=infinite
+[planner_server-4] [INFO] [timestamp] [global_costmap.global_costmap.virtual_layer]: Added POLYGON [ID:4]: 4 points filled cost=250 duration=infinite
+[planner_server-4] [INFO] [timestamp] [global_costmap.global_costmap.virtual_layer]: Successfully loaded: 1 circles, 1 lines, 2 polygons
+[planner_server-4] [INFO] [timestamp] [global_costmap.global_costmap.virtual_layer]: Visualization enabled at 2.0 Hz
+[planner_server-4] [INFO] [timestamp] [global_costmap.global_costmap.virtual_layer]: VirtualLayer initialized: 1 circles, 1 lines, 2 polygons
+[planner_server-4] [INFO] [timestamp] [global_costmap.global_costmap]: Initialized plugin "virtual_layer"
+```
+
+---
+
+#### Optional: Enable Also in Local Costmap
+
+```yaml
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      plugins:
+        - obstacle_layer
+        - virtual_layer
+        - inflation_layer
+
+      virtual_layer:
+        plugin: "nav2_virtual_layer::VirtualLayer"
+        enabled: true
+        map_frame: map
+        enable_visualization: true
+```
+
+📌 Same configuration style applies
+
+---
+
+### Step 2: Create External Shapes File
+
+Create an external YAML file to define virtual shapes:
+
+- #### 📄 File: `config/virtual_layer_forms.yaml`
 
   ```yaml
   # config/virtual_layer_forms.yaml
   forms:
-    # A circular virtual obstacle
-    # Format: CIRCLE(x y radius) [COST:value] [DURATION:seconds]
-    - CIRCLE(5 -2 1.5) [COST:254] [DURATION:10]
+    # ========================================
+    # CIRCLES
+    # ========================================
+    # Format: CIRCLE(x y radius) [COST:value] [DURATION:seconds] [ID:number]
+    
+    # Permanent lethal circular obstacle
+    - CIRCLE(5 -2 1.5) [COST:254] [ID:1]
+    
+    # Temporary circular zone (expires after 30 seconds)
+    - CIRCLE(2 3 1.0) [COST:200] [DURATION:30] [ID:2]
 
-    # A virtual line obstacle
-    # Format: LINESTRING(x1 y1, x2 y2) [COST:value] [THICKNESS:value] [DURATION:seconds]
-    - LINESTRING(0 0, 10 0) [COST:200] [THICKNESS:0.4]
+    # ========================================
+    # LINES
+    # ========================================
+    # Format: LINESTRING(x1 y1, x2 y2) [COST:value] [THICKNESS:value] [DURATION:seconds] [ID:number]
+    
+    # Permanent line barrier
+    - LINESTRING(0 0, 10 0) [COST:254] [THICKNESS:0.4] [ID:10]
+    
+    # Temporary thin line (expires after 60 seconds)
+    - LINESTRING(-5 5, 5 5) [COST:200] [THICKNESS:0.2] [DURATION:60] [ID:11]
 
-    # A polygonal virtual obstacle
-    # Format: POLYGON(x1 y1, x2 y2, x3 y3, ...) [COST:value] [DURATION:seconds]
-    # The polygon can be open or filled depending on the definition
-    - POLYGON(0 0, 4 0, 4 3, 0 3) [COST:254]
+    # ========================================
+    # FILLED POLYGONS
+    # ========================================
+    # Format: POLYGON((), x1 y1, x2 y2, ...) [COST:value] [DURATION:seconds] [ID:number]
+    
+    # Permanent filled rectangle
+    - POLYGON((), 0 0, 4 0, 4 3, 0 3) [COST:254] [ID:20]
+    
+    # Temporary filled triangle (expires after 45 seconds)
+    - POLYGON((), -2 -2, 0 2, 2 -2) [COST:128] [DURATION:45] [ID:21]
+
+    # ========================================
+    # OPEN POLYGONS (Polylines)
+    # ========================================
+    # Format: POLYGON(x1 y1, x2 y2, ...) [COST:value] [DURATION:seconds] [ID:number]
+    
+    # Permanent open polygon boundary
+    - POLYGON(6 0, 8 0, 8 4, 6 4) [COST:200] [ID:30]
+    
+    # Temporary polyline path (expires after 20 seconds)
+    - POLYGON(-3 -3, -1 -1, 1 -3, 3 -1) [COST:150] [DURATION:20] [ID:31]
   ```
+
+**Notes:**
+- `[ID:n]` is **optional** - if omitted, IDs are auto-assigned
+- `[DURATION:n]` - shapes expire after n seconds; omit for permanent shapes
+- `[COST:n]` - ranges from 1 (low) to 254 (lethal); omit to use `default_cost_level`
+- `[THICKNESS:n]` - only for lines, omit to use `line_thickness` parameter
 
 ---
 
@@ -232,18 +271,24 @@ ros2 launch my_robot_nav navigation_launch.py
 
 ---
 
-## Configuration
+## Configuration Parameters
 
-
-| Parameter                      | Type     | Default | Description                           |
-| ------------------------------ | -------- | ------- | ------------------------------------- |
-| `enabled`                      | bool     | `true`  | Enable the layer                      |
-| `map_frame`                    | string   | `map`   | Default coordinate frame              |
-| `line_thickness`               | double   | `0.3`   | Default line thickness                |
-| `default_cost_level`           | int      | `254`   | Default cost                          |
-| `expiration_check_frequency`   | double   | `1.0`   | How often to check for expired shapes (Hz)  |
-| `forms`                        | string[] | `[]`    | Inline WKT shapes                     |
-| `forms_file`                   | string   | `""`    | External YAML file                    |
+| Parameter                      | Type     | Default | Description                                    |
+| ------------------------------ | -------- | ------- | ---------------------------------------------- |
+| `enabled`                      | bool     | `true`  | Enable/disable the layer                       |
+| `map_frame`                    | string   | `map`   | Default coordinate frame for shapes            |
+| `line_thickness`               | double   | `0.3`   | Default thickness for lines (meters)           |
+| `default_cost_level`           | int      | `254`   | Default cost when not specified                |
+| `expiration_check_frequency`   | double   | `1.0`   | Rate to check for expired shapes (Hz)          |
+| `enable_visualization`         | bool     | `true`  | Enable RViz2 marker visualization              |
+| `visualization_rate`           | double   | `2.0`   | Rate to publish visualization markers (Hz)     |
+| `text_height`                  | double   | `0.5`   | Height of ID text markers (meters)             |
+| `text_color_r`                 | double   | `0.0`   | Red component of text color (0.0-1.0)          |
+| `text_color_g`                 | double   | `0.0`   | Green component of text color (0.0-1.0)        |
+| `text_color_b`                 | double   | `0.0`   | Black component of text color (0.0-1.0)        |
+| `text_color_a`                 | double   | `1.0`   | Alpha (transparency) of text (0.0-1.0)         |
+| `forms`                        | string[] | `[]`    | Inline WKT shape definitions                   |
+| `forms_file`                   | string   | `""`    | Path to external YAML file with shapes         |
 
 ---
 
@@ -251,27 +296,48 @@ ros2 launch my_robot_nav navigation_launch.py
 
 - ### Circle
 
-  ```yaml
-  CIRCLE(x y radius) [COST:n] [DURATION:seconds]
   ```
+  CIRCLE(x y radius) [COST:n] [DURATION:seconds] [ID:number]
+  ```
+
+  - **Example:**
+    ```yaml
+    - "CIRCLE(5.0 3.2 1.5) [COST:254] [DURATION:60] [ID:1]"
+    ```
 
 - ### Line
 
-  ```yaml
-  LINESTRING(x1 y1, x2 y2) [COST:n] [THICKNESS:t] [DURATION:seconds]
   ```
+  LINESTRING(x1 y1, x2 y2) [COST:n] [THICKNESS:t] [DURATION:seconds] [ID:number]
+  ```
+
+  - **Example:**
+    ```yaml
+    - "LINESTRING(0 0, 10 5) [COST:200] [THICKNESS:0.5] [ID:10]"
+    ```
 
 - ### Filled Polygon
 
-  ```yaml
-  POLYGON((), x1 y1, x2 y2, x3 y3) [COST:n] [DURATION:seconds]
   ```
+  POLYGON((), x1 y1, x2 y2, x3 y3, ...) [COST:n] [DURATION:seconds] [ID:number]
+  ```
+
+  - **Example:**
+    ```yaml
+    - "POLYGON((), 0 0, 4 0, 4 4, 0 4) [COST:254] [ID:20]"
+    ```
 
 - ### Open Polygon (Polyline)
 
-  ```yaml
-  POLYGON(x1 y1, x2 y2, x3 y3) [COST:n] [DURATION:seconds]
   ```
+  POLYGON(x1 y1, x2 y2, x3 y3, ...) [COST:n] [DURATION:seconds] [ID:number]
+  ```
+
+  - **Example:**
+    ```yaml
+    - "POLYGON(1 1, 3 1, 3 3, 1 3) [COST:180] [ID:30]"
+    ```
+
 
 ---
 
@@ -285,9 +351,10 @@ ros2 launch my_robot_nav navigation_launch.py
 | 128  | Medium cost     |
 | 1–50 | Low cost        |
 
-➡ Highest cost always wins
-
-➡ Costs merge with existing costmap
+**Notes:**
+- ➡ **Highest cost always wins** when shapes overlap
+- ➡ Costs **merge** with existing costmap (inflation, obstacles, etc.)
+- ➡ Use cost gradients to create soft boundaries and priority zones
 
 <img src="docs/virtual_layer_diff_cost.gif" style="display:block; margin:auto;">
 
@@ -295,166 +362,250 @@ ros2 launch my_robot_nav navigation_launch.py
 
 ## Runtime Management
 
-All services exist in:
-
+All services exist under both:
 - `/global_costmap/virtual_layer/...`
 - `/local_costmap/virtual_layer/...`
 
 ## 🛠 VirtualLayer Services
 
-| Service Name                      | Service Type                         | Description                                                      | Request Fields                                                   | Response Fields      |
-| --------------------------------- | ------------------------------------ | ---------------------------------------------------------------- | ---------------------------------------------------------------- | -------------------- |
-| `/virtual_layer/add_circle`       | `nav2_virtual_layer/srv/AddCircle`   | Add a circular virtual obstacle to the costmap                   | `x`, `y`, `radius`, `frame_id`, `cost_level`, `duration`         | `uuid`, `success`    |
-| `/virtual_layer/add_line`         | `nav2_virtual_layer/srv/AddLine`     | Add a line virtual obstacle to the costmap                       | `x1`, `y1`, `x2`, `y2`, `thickness`, `frame_id`, `cost_level`, `duration` | `uuid`, `success`    |
-| `/virtual_layer/add_polygon`      | `nav2_virtual_layer/srv/AddPolygon`  | Add a polygon virtual obstacle to the costmap                    | `points[]`, `frame_id`, `cost_level`, `duration`                 | `uuid`, `success`    |
-| `/virtual_layer/remove_shape`     | `nav2_virtual_layer/srv/RemoveShape` | Remove a virtual shape using its UUID                            | `uuid`                                                           | `success`            |
-| `/virtual_layer/clear_all`        | `std_srvs/srv/Trigger`               | Remove all virtual shapes from the costmap                       | —                                                                | `success`, `message` |
-| `/virtual_layer/restore_defaults` | `std_srvs/srv/Trigger`               | Clear all shapes and reload default ones from parameters or file | —                                                                | `success`, `message` |
+| Service Name                      | Service Type                         | Description                                                      | Request Fields                                                         | Response Fields                  |
+| --------------------------------- | ------------------------------------ | ---------------------------------------------------------------- | ---------------------------------------------------------------------- | -------------------------------- |
+| `/virtual_layer/add_circle`       | `nav2_virtual_layer/srv/AddCircle`   | Add a circular virtual obstacle                                  | `x`, `y`, `radius`, `frame_id`, `cost_level`, `duration`, `shape_id`   | `uuid`, `shape_id`, `success`    |
+| `/virtual_layer/add_line`         | `nav2_virtual_layer/srv/AddLine`     | Add a line virtual obstacle                                      | `x1`, `y1`, `x2`, `y2`, `thickness`, `frame_id`, `cost_level`, `duration`, `shape_id` | `uuid`, `shape_id`, `success`    |
+| `/virtual_layer/add_polygon`      | `nav2_virtual_layer/srv/AddPolygon`  | Add a polygon virtual obstacle                                   | `points[]`, `frame_id`, `cost_level`, `duration`, `shape_id`           | `uuid`, `shape_id`, `success`    |
+| `/virtual_layer/remove_shape`     | `nav2_virtual_layer/srv/RemoveShape` | Remove shape by UUID or numeric ID                               | `identifier` (UUID string or numeric ID as string)                     | `success`, `message`             |
+| `/virtual_layer/clear_all`        | `std_srvs/srv/Trigger`               | Remove all virtual shapes                                        | —                                                                      | `success`, `message`             |
+| `/virtual_layer/restore_defaults` | `std_srvs/srv/Trigger`               | Clear all and reload from parameters/file                        | —                                                                      | `success`, `message`             |
+| `/virtual_layer/reload_shapes`    | `std_srvs/srv/Trigger`               |  Reload shapes from YAML file without restart            | —                                                                      | `success`, `message`             |
 
 ---
 
-## Services Examples
+## Service Examples
 
 - ### Add Circle
 
   ```bash
-  ros2 service call /global_costmap/virtual_layer/add_circle nav2_virtual_layer/srv/AddCircle \
-  "{x: -7.0, y: -4.0, radius: 1.0, cost_level: 254, duration: 30.0}"
+  ros2 service call /global_costmap/virtual_layer/add_circle \
+    nav2_virtual_layer/srv/AddCircle \
+    "{x: -7.0, y: -4.0, radius: 1.0, cost_level: 254, duration: 30.0}"
+  ```
+
+  **Response:**
+  ```
+  uuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  shape_id: 42
+  success: true
   ```
 
 - ### Add Line
 
   ```bash
-  ros2 service call /global_costmap/virtual_layer/add_line  nav2_virtual_layer/srv/AddLine \
-  "{x1: 0, y1: -5, x2: 4, y2: -5, thickness: 0.3, cost_level: 254}"
+  ros2 service call /global_costmap/virtual_layer/add_line \
+    nav2_virtual_layer/srv/AddLine \
+    "{x1: 0, y1: -5, x2: 4, y2: -5, thickness: 0.3, cost_level: 254, duration: 0}"
   ```
 
-- ### Add Polygon
+- ### Add Polygon 
 
   ```bash
-  ros2 service call /global_costmap/virtual_layer/add_polygon nav2_virtual_layer/srv/AddPolygon \
-  "{points: [{x: 1, y: -1},
-            {x: 3, y: -1},
-            {x: 3, y: 7},
-            {x: 1, y: 2},
-            {x: 1, y: -1}],
-    cost_level: 254, 
-    duration: 10.0}"
+  ros2 service call /global_costmap/virtual_layer/add_polygon \
+    nav2_virtual_layer/srv/AddPolygon \
+    "{points: [{x: 1, y: -1}, {x: 3, y: -1}, {x: 3, y: 2}, {x: 1, y: 2}], 
+      cost_level: 254, 
+      duration: 10.0}"
   ```
+  ![Service Usage Animation](docs/Services.gif)
+  ---
 
-- ### Remove Shape
+- ### Remove Shape (by ID or UUID)
+
+  - **By numeric ID:**
+    ```bash
+    ros2 service call /global_costmap/virtual_layer/remove_shape \
+      nav2_virtual_layer/srv/RemoveShape \
+      "{identifier: '42'}"
+    ```
+    ![Service Usage Animation](docs/remove_id.gif)
+
+  - **By UUID:**
+    ```bash
+    ros2 service call /global_costmap/virtual_layer/remove_shape \
+      nav2_virtual_layer/srv/RemoveShape \
+      "{identifier: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'}"
+    ```
+    ![Service Usage Animation](docs/remove_uuid.gif)
+    ---
+
+
+
+
+- ### Clear All Shapes
 
   ```bash
-  ros2 service call /global_costmap/virtual_layer/remove_shape \
-  nav2_virtual_layer/srv/RemoveShape \
-  "{uuid: 'UUID_HERE'}"
+  ros2 service call /global_costmap/virtual_layer/clear_all \
+    std_srvs/srv/Trigger
   ```
 
-  ![alt text](docs/Services.gif)
-
-- ### Clear All
+- ### Restore Default Shapes
 
   ```bash
-  ros2 service call /global_costmap/virtual_layer/clear_all std_srvs/srv/Trigger
+  ros2 service call /global_costmap/virtual_layer/restore_defaults \
+    std_srvs/srv/Trigger
   ```
 
-- ### Restore Defaults
+  ![Clear All Animation](docs/clear_all.gif)
+
+  ---
+
+- ### Reload Shapes from YAML
 
   ```bash
-  ros2 service call /global_costmap/virtual_layer/restore_defaults std_srvs/srv/Trigger
+  ros2 service call /global_costmap/virtual_layer/reload_shapes \
+    std_srvs/srv/Trigger
   ```
 
-  ![alt text](docs/clear_all.gif)
+  ![Reload Animation](docs/reload.gif)
 
-- All services are exposed under the `virtual_layer` namespace.
-- `add_*` services return a **UUID** that can later be used with `remove_shape`.
-- `clear_all` and `restore_defaults` use `Trigger` to provide clear success feedback.
-- Shape coordinates are interpreted in the configured `map_frame`.
+  #### ⚠️ Important Note About `forms_file`
 
----
+  The behavior of `/reload_shapes` depends on how the `forms_file` path is defined:
 
-## Topics Example
+  -  **Using absolute path (Recommended during development):**
 
-The virtual_layer subscribes to the `shapes` topic for dynamic shape additions via WKT strings.
+      ```yaml
+      forms_file: "/home/sherif/robot_ws/src/rahal_navigation/config/virtual_layer_forms.yaml"
+      ```
+      - Changes are applied immediately.
+      - No need to run `colcon build`.
+
+  - **Using `package://` URI:**
+
+      ```yaml
+      forms_file: "package://rahal_navigation/config/virtual_layer_forms.yaml"
+      ```
+
+    - Requires running `colcon build` after modifying the YAML file.
+
+    ---
+
+## Topic Examples
+
+The virtual_layer subscribes to `/virtual_layer/shapes` for dynamic WKT additions.
 
 - ### Add Circle via Topic
 
   ```bash
   ros2 topic pub --once \
-  /global_costmap/virtual_layer/shapes std_msgs/msg/String \
-  "{data: 'CIRCLE(1.5 5.5 0.8) [COST:254]'}"
+    /global_costmap/virtual_layer/shapes std_msgs/msg/String \
+    "{data: 'CIRCLE(1.5 5.5 0.8) [COST:254] [ID:100]'}"
   ```
 
 - ### Add Line via Topic
 
   ```bash
   ros2 topic pub --once \
-  /global_costmap/virtual_layer/shapes std_msgs/msg/String \
-  "{data: 'LINESTRING(-1 -2, -5 -5) [COST:254] [THICKNESS:0.3] [DURATION:30]'}"
+    /global_costmap/virtual_layer/shapes std_msgs/msg/String \
+    "{data: 'LINESTRING(-1 -2, -5 -5) [COST:254] [THICKNESS:0.3] [DURATION:30] [ID:101]'}"
   ```
 
 - ### Add Open Polygon via Topic
 
   ```bash
   ros2 topic pub --once \
-  /global_costmap/virtual_layer/shapes std_msgs/msg/String \
-  "{data: 'POLYGON(0 0, 4 0, 4 4, 0 4) [COST:254]'}"
+    /global_costmap/virtual_layer/shapes std_msgs/msg/String \
+    "{data: 'POLYGON(0 0, 4 0, 4 4, 0 4) [COST:254] [ID:102]'}"
   ```
 
 - ### Add Filled Polygon via Topic
 
   ```bash
   ros2 topic pub --once \
-  /global_costmap/virtual_layer/shapes std_msgs/msg/String \
-  "{data: 'POLYGON((), 0 0, 4 0, 4 -4, 0 -4) [COST:254]'}"
+    /global_costmap/virtual_layer/shapes std_msgs/msg/String \
+    "{data: 'POLYGON((), 0 0, 4 0, 4 -4, 0 -4) [COST:254] [ID:103]'}"
   ```
 
-  ![alt text](docs/topic.gif)
+  ![Topic Usage Animation](docs/topic.gif)
 
-**Note:** Shapes added via topic use the WKT format and support all cost level and geometry options.
+**Note:** IDs specified in topic messages are honored if available, otherwise auto-assigned.
 
 ---
 
-### Expected Expiration Output
+## Visualization in RViz2
 
-When shapes are added with a finite `[DURATION]`, the virtual layer periodically checks for expired shapes.
-Once a shape expires, it is automatically removed and logged.
+When `enable_visualization: true`, the plugin publishes shape ID markers to `/virtual_layer/shape_markers`.
 
-Example output when shapes expire:
+### Setup RViz2
 
-<pre style="font-size: 12px;">
-[planner_server-4] [INFO] [1769427367.450081331] [global_costmap.global_costmap.virtual_layer]: Removed expired CIRCLE [f203dd4d-9b04-48ef-b343-2210df3b44f8]
-[planner_server-4] [INFO] [1769427367.450137195] [global_costmap.global_costmap.virtual_layer]: Removed expired LINE [833e9c85-b972-43c7-9e6e-462464c71552]
-[planner_server-4] [INFO] [1769427367.450145899] [global_costmap.global_costmap.virtual_layer]: Removed 2 expired shape(s)
-</pre>
+1. Add **MarkerArray** display
+2. Set topic to `/global_costmap/virtual_layer/shape_markers`
+3. Shape IDs will appear as text labels above each obstacle
 
+### Marker Details
 
+- **Circles**: ID displayed at center
+- **Lines**: ID displayed at midpoint
+- **Polygons**: ID displayed at centroid
+- **Update Rate**: Controlled by `visualization_rate` parameter
+- **Appearance**: Customizable via `text_height` and `text_color_*` parameters
+
+---
+
+## Shape Expiration
+
+### Expected Output
+
+When shapes with finite `[DURATION]` expire:
+
+```
+[planner_server-4] [DEBUG] [timestamp] [global_costmap.virtual_layer]: Circle [ID:1, UUID:abc123] expired after 30.0 seconds
+[planner_server-4] [DEBUG] [timestamp] [global_costmap.virtual_layer]: Line [ID:2, UUID:def456] expired after 30.0 seconds
+[planner_server-4] [INFO] [timestamp] [global_costmap.virtual_layer]: Removed expired CIRCLE [ID:1, UUID:abc123]
+[planner_server-4] [INFO] [timestamp] [global_costmap.virtual_layer]: Removed expired LINE [ID:2, UUID:def456]
+[planner_server-4] [INFO] [timestamp] [global_costmap.virtual_layer]: Removed 2 expired shape(s)
+```
+
+### Behavior
+
+- Expiration checks run at `expiration_check_frequency` (default: 1 Hz)
+- Shapes with `duration < 0` or `duration == 0` persist forever
+- Infinite-duration shapes are skipped efficiently (no overhead)
+- Expired shapes are automatically removed from costmap
+
+---
 
 ## Notes and Edge Cases
 
-- If `[COST]` is missing → `default_cost_level` is used
-- If `[THICKNESS]` is missing → `line_thickness` is used
-- If `[DURATION]` is missing or 0 → shape persists forever
-- Negative duration values → shape persists forever
-- Expiration checks run at `expiration_check_frequency` (default: 1 Hz)
-  > Shapes with infinite duration are skipped efficiently during expiration checks and do not add noticeable overhead.
+### Parameter Defaults
 
-- TF failure → shape is skipped safely
-- Overlapping shapes → highest cost wins
-- Polygons need ≥ 3 points
-- Lines need 2 point
+- Missing `[COST]` tag → uses `default_cost_level`
+- Missing `[THICKNESS]` tag → uses `line_thickness` parameter
+- Missing `[DURATION]` tag → shape persists forever
+- Missing `[ID]` tag → auto-assigns next available ID
+- Negative or zero `duration` → infinite lifetime
+
+### Shape Requirements
+
+- **Polygons**: Need ≥ 3 points
+- **Lines**: Need exactly 2 points
+- **Circles**: Require positive radius
+
+### Edge Cases
+
+- **TF failures**: Shapes in unreachable frames are safely skipped
+- **Overlapping shapes**: Highest cost value wins at each cell
+- **ID conflicts**: Requested IDs are honored if available, else auto-assigned
+- **Duplicate UUIDs**: Internal UUID conflicts are impossible (UUID v4 generation)
+- **Hot reload failures**: YAML file must exist and be valid
+
+### Performance
+
+- Expiration checks: O(n) where n = number of shapes with finite duration
+- Infinite shapes: Skipped during expiration (O(1) check per shape)
+- TF lookups: Cached by tf2 for performance
+- Thread safety: Mutex-protected shape containers
 
 ---
 
-## Final Notes
-
-- ✅ Start with **global_costmap**
-- ✅ Optionally enable **local_costmap**
-- ✅ Use YAML for large maps
-- ✅ Services for runtime control
-- ✅ No restart required
-
----
 
 ## References
 
@@ -484,6 +635,5 @@ Special thanks to the Nav2 team and the ROS community for their excellent docume
 <div align="center">
 
 **Made with ❤️ for the Robotics Community**
-
 
 </div>

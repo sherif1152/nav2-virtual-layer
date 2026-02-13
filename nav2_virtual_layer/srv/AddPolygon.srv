@@ -5,8 +5,11 @@ geometry_msgs/Point[] points   # Vertices of the polygon
 string frame_id                # Reference frame (empty = use layer default)
 uint8 cost_level               # Cost level (254=LETHAL, 253=HIGH, 200=MEDIUM, 50=LOW)
 float64 duration               # Duration in seconds (-1.0 = infinite, default)
+string identifier              # UUID string OR numeric ID (e.g., "1", "2", "3")
 
 ---
 # Response:
 string uuid                    # Unique identifier of the created shape
+int32 shape_id  # Numeric ID for easy reference
 bool success                   # Whether the operation succeeded
+
